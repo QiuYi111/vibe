@@ -1,0 +1,11 @@
+[
+  {
+    "id": "task_1",
+    "files": [
+      "src/main.py"
+    ]
+  },
+  {
+    "id": "task_2"
+  }
+]
