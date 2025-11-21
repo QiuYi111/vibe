@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==============================================================================
-# VIBE FLOW: Sleep-Mode Development Engine
-# Version: 4.0 (Production Hardened)
-# Fixed: Self-Healing Write-Back, JSON Parsing, Security, Race Conditions
+# VIBE FLOW: Git-Native Autonomous Coding Engine
+# Version: 5.0 (Git-Native Edition)
+# Architecture: Worktree-based parallel development with AI-powered merge resolution
 # ==============================================================================
 
 # --- ⚙️ 全局配置 ---
@@ -12,9 +12,10 @@ PLAN_FILE="vibe_plan.json"
 REPORT_FILE="vibe_report.md"
 LOG_DIR=".vibe_logs"
 MAX_RETRIES=3
-MAX_CONTEXT_SIZE_KB=500  # 限制 Context 大小，防止 API 报错
+MAX_CONTEXT_SIZE_KB=500
+MAX_PARALLEL_AGENTS=${MAX_PARALLEL_AGENTS:-2}
 
-# 忽略列表 (Security Hardened)
+# 忽略列表
 IGNORE_PATTERNS="**/*.lock,**/node_modules,**/dist,**/.git,**/.DS_Store,**/build,**/.pio,**/.env*,**/*.key,**/secrets.*,**/__pycache__"
 
 # --- 🎨 颜色定义 ---
@@ -25,40 +26,341 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# --- 🐍 Python Patcher (关键修复：用于将 LLM 输出写入文件) ---
-# 这是一个嵌入式 Python 脚本，用于解析自定义标记并覆写文件
-read -r -d '' PYTHON_PATCHER << EOM
-import sys, re, os
+# --- 🌳 Git Worktree Management (v5.0 Core Infrastructure) ---
 
-log_file = sys.argv[1]
+# Create isolated worktree for a task
+function create_task_worktree() {
+    local task_id="$1"
+    local branch_name="feat/task_${task_id}"
+    local worktree_path=".vibe_worktrees/${task_id}"
+    
+    # Ensure worktree directory exists
+    mkdir -p .vibe_worktrees
+    
+    # Create branch and worktree
+    if ! git worktree add -b "$branch_name" "$worktree_path" 2>/dev/null; then
+        # Branch might already exist, try without -b
+        git worktree add "$worktree_path" "$branch_name" 2>/dev/null || {
+            echo "Error: Failed to create worktree for $task_id"
+            return 1
+        }
+    fi
+    
+    echo "$worktree_path"
+}
+
+# Cleanup worktree after completion
+function cleanup_task_worktree() {
+    local task_id="$1"
+    local worktree_path=".vibe_worktrees/${task_id}"
+    
+    if [[ -d "$worktree_path" ]]; then
+        git worktree remove "$worktree_path" --force 2>/dev/null
+    fi
+}
+
+# --- 🔍 Review Agent (Linus-style code review + dynamic test generation) ---
+function run_review_agent() {
+    local task_id="$1"
+    local task_name="$2"
+    local worktree_path="$3"
+    local domain="$4"
+    local review_log="$LOG_DIR/review_${task_id}.log"
+    local review_report="$LOG_DIR/review_report_${task_id}.md"
+    local test_cmd_file="$LOG_DIR/test_cmd_${task_id}.txt"
+    
+    echo -e "${BLUE}🔍 [Review Agent] Analyzing task: $task_name${NC}"
+    
+    # Get changes in worktree
+    local changes=$(cd "$worktree_path" && git diff HEAD~1 --stat 2>/dev/null || echo "No commits yet")
+    local diff_content=$(cd "$worktree_path" && git diff HEAD~1 2>/dev/null || echo "No diff available")
+    
+    local review_prompt="
+[ROLE] You are Linus Torvalds reviewing code for the Linux kernel.
+
+[TASK] $task_name (ID: $task_id)
+[DOMAIN] $domain
+[WORKTREE] $worktree_path
+
+[CHANGES]
+$changes
+
+[DIFF]
+$diff_content
+
+[REVIEW PHILOSOPHY]
+1. **Good Taste**: Code should be simple and elegant. No special cases.
+2. **Clarity Over Cleverness**: If it's not obvious, it's wrong.
+3. **Never Break Userspace**: Don't introduce breaking changes.
+4. **Resource Management**: Every allocation must have a clear deallocation path.
+5. **Error Handling**: Handle errors explicitly. No silent failures.
+
+[INSTRUCTIONS]
+1. Review the code changes using the philosophy above
+2. Determine the appropriate test command(s) for this domain and changes
+3. Output your review in this format:
+
+## Review Report
+[Your brutally honest review. If it's good, say LGTM. If not, be specific about what's wrong.]
+
+## Test Command
+[Single line test command to run, e.g., 'npm test' or 'pytest tests/test_foo.py']
+
+If no tests are needed: echo 'No tests required'
+"
+    
+    cd "$worktree_path"
+    claude --dangerously-skip-permissions -p "$review_prompt" > "$review_report" 2>> "$review_log"
+    
+    # Extract test command
+    grep -A1 "## Test Command" "$review_report" | tail -n1 | tr -d '`' > "$test_cmd_file"
+    
+    # Run the test command
+    local test_cmd=$(cat "$test_cmd_file")
+    echo ">>> Running test: $test_cmd" >> "$review_log"
+    
+    if eval "$test_cmd" >> "$review_log" 2>&1; then
+        echo "✅ Tests passed" >> "$review_log"
+        cd - > /dev/null
+        return 0
+    else
+        echo "❌ Tests failed" >> "$review_log"
+        cd - > /dev/null
+        return 1
+    fi
+}
+
+# --- 🔀 Merge Manager (Orchestrates branch integration) ---
+function merge_manager() {
+    local task_branches=("$@")
+    
+    echo -e "${BLUE}🔀 [Merge Manager] Integrating ${#task_branches[@]} branches...${NC}"
+    
+    for branch in "${task_branches[@]}"; do
+        if git merge --no-edit "$branch" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ Merged $branch${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Conflict detected in $branch. Starting Mediator...${NC}"
+            run_mediator "$branch"
+        fi
+    done
+}
+
+# --- ⚖️ AI Mediator (Linus-style conflict resolution) ---
+function run_mediator() {
+    local conflicted_branch="$1"
+    local conflict_files=$(git diff --name-only --diff-filter=U)
+    local mediator_log="$LOG_DIR/mediator_${conflicted_branch}.log"
+    
+    # Generate conflict context
+    local conflict_diff=$(git diff)
+    
+    local mediation_prompt="
+[ROLE] You are Linus Torvalds mediating a merge conflict.
+
+[PHILOSOPHY]
+- Good code has no special cases
+- When in doubt, choose simplicity
+- Both sides might be wrong - don't be afraid to write a third solution
+- Never sacrifice correctness for convenience
+
+[CONFLICT]
+Branch: $conflicted_branch
+Files: $conflict_files
+
+[DIFF WITH CONFLICT MARKERS]
+$conflict_diff
+
+[TASK]
+Resolve the conflicts by:
+1. Understanding the intent of both code paths
+2. Applying good taste - choose the simpler, more elegant solution
+3. If both are flawed, write a better third solution
+4. Use your native file editing tools to resolve conflicts in each file
+5. Stage the resolved files and complete the merge
+
+Be decisive. This is your codebase now.
+"
+    
+    # Run Claude Code in the main worktree to resolve conflicts
+    claude --dangerously-skip-permissions -p "$mediation_prompt" > "$mediator_log" 2>&1
+    
+    # Check if resolved
+    if git diff --name-only --diff-filter=U | grep -q .; then
+        echo -e "${RED}❌ Mediator failed to resolve conflicts. Manual intervention required.${NC}"
+        exit 1
+    fi
+    
+    # Complete merge
+    git commit --no-edit
+    echo -e "${GREEN}✅ Conflicts resolved by AI Mediator${NC}"
+}
+
+# --- 🧩 Integration Phase: System Verification & Healing ---
+function run_integration_phase() {
+    local domain="$1"
+    local log_file="$LOG_DIR/integration_system.log"
+    
+    echo -e "${BLUE}🧩 [Integration] Starting System-Wide Verification...${NC}"
+    echo ">>> Starting Integration Phase" > "$log_file"
+
+    # 1. Determine global test command
+    local test_cmd=""
+    case "$domain" in
+        HARDWARE) test_cmd="pio test -e native" ;;
+        AI_ROBOT) test_cmd="pytest" ;; 
+        WEB)      test_cmd="npm test" ;;
+        PYTHON_GENERIC) test_cmd="pytest" ;;
+        *)        test_cmd="echo 'No global test command detected'" ;;
+    esac
+
+    # 2. Run full regression test suite
+    echo -e "${CYAN}   Running global test suite: $test_cmd${NC}"
+    if eval "$test_cmd" >> "$log_file" 2>&1; then
+        echo -e "${GREEN}✅ System Integration Tests Passed.${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ System Tests Failed. Activating System Healer...${NC}"
+    fi
+
+    # 3. System Healer (fix integration issues)
+    # This Agent has global perspective to fix "Integration Hell"
+    local retries=0
+    local max_retries=2
+    
+    while [[ $retries -lt $max_retries ]]; do
+        echo ">>> System Healer Attempt $((retries+1))" >> "$log_file"
+        
+        local error_log=$(tail -n 100 "$log_file")
+        local prompt="
+[ROLE] System Architect & Debugger
+
+[CONTEXT] 
+Multiple features were just merged into the main branch. 
+Individual unit tests passed, but the GLOBAL system test failed.
+
+[ERROR LOG]
+$error_log
+
+[INSTRUCTION]
+1. Analyze the error. It is likely an API mismatch or side-effect between modules.
+2. Fix the code in the current directory directly using your native file editing tools.
+3. After fixing, commit your changes with: git commit -am 'System Healer: Fixed integration issue'
+4. Explain what you fixed and why.
+
+Apply Linus philosophy:
+- Fix the root cause, not symptoms
+- Prefer simple solutions over complex ones
+- If multiple modules are wrong, fix them all
+"
+        
+        # Let Claude fix code in main branch
+        claude --dangerously-skip-permissions -p "$prompt" >> "$log_file" 2>&1
+        
+        # Retry test
+        if eval "$test_cmd" >> "$log_file" 2>&1; then
+            echo -e "${GREEN}✅ System Healer fixed the integration issue!${NC}"
+            return 0
+        fi
+        
+        ((retries++))
+    done
+
+    echo -e "${RED}💀 Critical: System Healer failed to fix integration issues. Manual check required.${NC}"
+    return 1
+}
+
+# --- 🧐 CTO Review: Architectural Audit ---
+function run_cto_review() {
+    local start_hash="$1"
+    local report_file="vibe_cto_report.md"
+    
+    echo -e "${BLUE}🧐 [CTO] Conducting Final Architectural Review...${NC}"
+    
+    # Get total changes from this session
+    local total_diff=$(git diff "$start_hash" HEAD --stat)
+    local commit_log=$(git log "$start_hash..HEAD" --oneline)
+    
+    local prompt="
+[ROLE] Chief Technology Officer (CTO)
+
+[TASK]
+Review the code changes made in this entire development session.
+
+[SESSION COMMITS]
+$commit_log
+
+[CHANGES SUMMARY]
+$total_diff
+
+[REVIEW CRITERIA]
+Identify any:
+1. **Architectural inconsistencies** (e.g., mixed naming conventions, inconsistent patterns)
+2. **Redundant code** introduced by parallel agents
+3. **Potential security risks** in the new code
+4. **API design issues** (breaking changes, poor interfaces)
+5. **Code style violations** (inconsistent formatting, unclear naming)
+
+[OUTPUT FORMAT]
+Generate a Markdown report with:
+- Executive Summary (1-2 sentences)
+- Quality Score (1-10)
+- Issues Found (list with severity: CRITICAL/HIGH/MEDIUM/LOW)
+- Recommendations for follow-up work
+
+Be honest. If the code is excellent, say so. If it needs work, be specific about what and why.
+Use Linus Torvalds' standards: good taste, simplicity, clarity.
+"
+    
+    claude --dangerously-skip-permissions -p "$prompt" > "$report_file"
+    echo -e "${GREEN}📝 CTO Report generated: $report_file${NC}"
+    
+    # Display summary
+    if [[ -f "$report_file" ]]; then
+        echo -e "${CYAN}=== CTO Review Summary ===${NC}"
+        head -n 10 "$report_file"
+        echo -e "${CYAN}=== (Full report in $report_file) ===${NC}"
+    fi
+}
+
+# --- 🐍 Python JSON Extractor ---
+read -r -d '' JSON_EXTRACTOR << EOM
+import sys, json, re
+
+def extract_json(content):
+    # 1. Try to find markdown code blocks first
+    pattern = re.compile(r'\`\`\`(?:json)?\s*(\[.*?\])\s*\`\`\`', re.DOTALL)
+    match = pattern.search(content)
+    if match:
+        return match.group(1)
+    
+    # 2. Fallback: Find the first '[' and the last ']'
+    start = content.find('[')
+    end = content.rfind(']')
+    
+    if start != -1 and end != -1 and end > start:
+        return content[start:end+1]
+    return None
+
 try:
-    with open(log_file, 'r', encoding='utf-8') as f:
-        content = f.read()
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], 'r', encoding='utf-8') as f:
+            content = f.read()
+    else:
+        content = sys.stdin.read()
 
-    # 匹配 <<<<FILE:path>>>>...<<<<END>>>>
-    pattern = re.compile(r'<<<<FILE:(.*?)>>>>(.*?)<<<<END>>>>', re.DOTALL)
-    matches = pattern.findall(content)
-
-    if not matches:
-        print("NO_CHANGES_FOUND")
-        sys.exit(0)
-
-    for file_path, file_content in matches:
-        file_path = file_path.strip()
-        # 安全检查：防止路径穿越
-        if '..' in file_path or file_path.startswith('/'):
-            print(f"SKIPPING_UNSAFE_PATH: {file_path}")
-            continue
-        
-        # 确保目录存在
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(file_content.strip())
-        print(f"UPDATED: {file_path}")
+    json_str = extract_json(content)
+    
+    if json_str:
+        # Validate JSON
+        obj = json.loads(json_str)
+        print(json.dumps(obj, indent=2))
+    else:
+        print("Error: No JSON found", file=sys.stderr)
+        sys.exit(1)
 
 except Exception as e:
-    print(f"PATCH_ERROR: {str(e)}")
+    print(f"Error: {str(e)}", file=sys.stderr)
     sys.exit(1)
 EOM
 
@@ -78,7 +380,7 @@ function check_deps() {
 function detect_domain() {
     if [[ -f "platformio.ini" || -f "CMakeLists.txt" ]]; then echo "HARDWARE"; return; fi
     if [[ -f "mamba_env.yaml" || -d "src/ros2" ]]; then echo "AI_ROBOT"; return; fi
-    if ls *.py >/dev/null 2>&1; then echo "PYTHON_GENERIC"; return; fi
+    if ls *.py > /dev/null 2>&1; then echo "PYTHON_GENERIC"; return; fi
     if [[ -f "package.json" || -f "next.config.js" ]]; then echo "WEB"; return; fi
     echo "GENERIC"
 }
@@ -89,25 +391,10 @@ function detect_mode() {
     echo "MAINTAIN"
 }
 
-# --- 🛠️ JSON 提取工具 (增强健壮性) ---
+# --- 🛠️ JSON 提取工具 ---
 function extract_json_block() {
     local input_file="$1"
-    # 1. 尝试提取 ```json ... ``` 块
-    # 2. 如果没有代码块，尝试提取 [ ... ]
-    # 3. 清理非 JSON 字符
-    
-    local content=$(cat "$input_file")
-    
-    if echo "$content" | grep -q "^\`\`\`json"; then
-        # 提取 markdown 代码块
-        echo "$content" | sed -n '/^```json/,/^```/p' | sed '1d;$d'
-    elif echo "$content" | grep -q "^\`\`\`"; then
-         # 提取通用代码块
-        echo "$content" | sed -n '/^```/,/^```/p' | sed '1d;$d'
-    else
-        # 提取第一个 [ 和最后一个 ] 之间的内容 (原有逻辑增强)
-        awk '/\[/{p=1} p; /\]/{if(p) exit}' "$input_file" | sed '1s/^.*\[/[/' | sed '$s/\].*$/]/'
-    fi
+    python3 -c "$JSON_EXTRACTOR" "$input_file"
 }
 
 # --- 📚 Core: Librarian ---
@@ -148,7 +435,7 @@ function run_librarian() {
     NO actual code logic.
     Last line must be: <!-- COMMIT: $(git rev-parse HEAD 2>/dev/null || echo 'INIT') -->
     "
-    cat raw_context.xml | claude -p "$prompt" > "$INDEX_FILE"
+    cat raw_context.xml | claude --dangerously-skip-permissions -p "$prompt" > "$INDEX_FILE"
 }
 
 # --- 🏗️ Core: Architect ---
@@ -158,7 +445,6 @@ function run_architect() {
     local index=$(cat "$INDEX_FILE")
     local domain=$(detect_domain)
 
-    # 基础 Prompt
     local base_prompt="/sc:estimate
     [Context]
     Domain: $domain
@@ -169,14 +455,25 @@ function run_architect() {
     
     [Task]
     Break down requirements into parallelizable tasks.
+    Constraint: The system can run at most $MAX_PARALLEL_AGENTS parallel agents.
     IMPORTANT: Ensure tasks modify DIFFERENT files to avoid race conditions.
+    NOTE: Tasks will be executed in batches of $MAX_PARALLEL_AGENTS. Design tasks to be independent within batches.
     
     [Output Format]
     RETURN ONLY A RAW JSON ARRAY. 
-    DO NOT wrap in markdown code blocks (no \`\`\`).
-    DO NOT include any explanation or text before/after the JSON.
+    Wrap the JSON in a markdown code block like this:
+    \`\`\`json
+    [ ... ]
+    \`\`\`
+    DO NOT include any explanation or text outside the code block.
+    
+    SCHEMA DEFINITION:
+    - \"id\": string (unique task id)
+    - \"name\": string (short task name)  <-- MUST use \"name\", NOT \"title\"
+    - \"desc\": string (detailed description) <-- MUST use \"desc\", NOT \"description\"
+
     Example:
-    [{\"id\": \"task_1\", \"name\": \"Auth\", \"desc\": \"Implement login\", \"files\": [\"src/auth.py\"]}]
+    [{\"id\": \"task_1\", \"name\": \"Auth\", \"desc\": \"Implement login\"}]
     "
 
     local retry_count=0
@@ -185,10 +482,8 @@ function run_architect() {
 
     while [ $retry_count -lt $max_retries ]; do
         if [ $retry_count -eq 0 ]; then
-            # 首次尝试
-            claude -p "$base_prompt" > raw_plan_output.txt
+            claude --dangerously-skip-permissions -p "$base_prompt" > raw_plan_output.txt
         else
-            # 重试逻辑：将错误反馈给 LLM
             echo -e "${YELLOW}⚠️ JSON Parse Error. Retrying ($retry_count/$max_retries)...${NC}"
             local error_msg=$(jq -e . raw_plan.json 2>&1)
             local fix_prompt="
@@ -201,11 +496,11 @@ function run_architect() {
             
             [Instruction]
             Fix the JSON syntax. Output ONLY the valid JSON array.
+            REMINDER: Use \"name\" and \"desc\" fields.
             "
-            claude -p "$fix_prompt" > raw_plan_output.txt
+            claude --dangerously-skip-permissions -p "$fix_prompt" > raw_plan_output.txt
         fi
 
-        # 尝试提取和解析
         extract_json_block "raw_plan_output.txt" > raw_plan.json
         
         if jq -e . raw_plan.json > "$PLAN_FILE"; then
@@ -220,7 +515,6 @@ function run_architect() {
 
     if [ "$success" = false ]; then
         echo -e "${RED}❌ Architect failed to generate valid JSON after $max_retries retries.${NC}"
-        echo -e "${RED}Debug: See raw_plan_output.txt${NC}"
         exit 1
     fi
 }
@@ -232,142 +526,92 @@ function run_agent_pipeline() {
     local desc="$3"
     local domain=$(detect_domain)
     local log_file="$LOG_DIR/${id}.log"
+    local branch_name="feat/task_${id}"
     
-    echo -e "${CYAN}🚀 [Agent] $name ($domain)${NC}"
+    echo -e "${CYAN}🚀 [Agent] $name (Worktree: $branch_name)${NC}"
 
     (
-        # --- 1. Builder Phase ---
-        local test_cmd="echo 'No test command defined'"
+        # Create isolated worktree
+        local worktree_path=$(create_task_worktree "$id")
         
-        # Domain Logic
-        case "$domain" in
-            HARDWARE) test_cmd="pio test -e native" ;;
-            AI_ROBOT) test_cmd="pytest" ;; # Assumes pytest is configured
-            WEB)      test_cmd="npm test" ;;
-            PYTHON_GENERIC) test_cmd="pytest" ;;
-            *)        test_cmd="echo 'GENERIC: Verify manually'" ;;
-        esac
-
-        # 🔴 CRITICAL: Instruction for Write-Back
-        # We force the LLM to use delimiters that our Python Patcher can parse.
-        local write_instruction="
-        CRITICAL OUTPUT FORMAT:
-        To write code, you MUST wrap the file content exactly like this:
-        <<<<FILE: path/to/file.ext>>>>
-        code_here...
-        <<<<END>>>>
-        
-        You can output multiple files. Any text outside these tags is treated as comments.
-        "
-
-        local build_prompt="/sc:implement
-        [INDEX] $(cat $INDEX_FILE)
-        [TASK] $desc
-        $write_instruction
-        "
-        
-        echo ">>> Building..." > "$log_file"
-        # Run Claude and verify exit code
-        if ! claude -p "$build_prompt" >> "$log_file" 2>&1; then
-             echo "❌ API Error" >> "$log_file"
-             exit 1
+        if [[ -z "$worktree_path" ]]; then
+            echo "❌ Failed to create worktree" >> "$log_file"
+            exit 1
         fi
+        
+        # Initial build prompt (NO custom delimiters, NO hardcoded tests)
+        local build_prompt="/sc:implement
+[INDEX] $(cat $INDEX_FILE)
+[TASK] $desc
+[WORKTREE] $worktree_path
+[DOMAIN] $domain
 
-        # Apply Changes (Write-Back)
-        echo ">>> Applying changes..." >> "$log_file"
-        python3 -c "$PYTHON_PATCHER" "$log_file" >> "$log_file" 2>&1
-
-        # --- 2. Verifier & Healer Loop ---
+[INSTRUCTIONS]
+1. You are working in an isolated Git worktree at: $worktree_path
+2. FIRST, ensure .gitignore includes: node_modules/, venv/, __pycache__/, *.pyc, dist/, build/, .env
+3. Use your native file editing tools to implement the task
+4. Install dependencies if needed (npm install, pip install, etc.)
+5. When complete, commit your changes: git commit -am 'Agent: $name - Initial implementation'
+6. Use existing dependencies if available to save time
+"
+        
+        # Execute Claude Code in worktree
+        echo ">>> Agent working in $worktree_path..." > "$log_file"
+        cd "$worktree_path"
+        
+        # Self-healing loop with Review Agent
         local retries=0
-        local success=false
+        local review_feedback=""
         
         while [[ $retries -lt $MAX_RETRIES ]]; do
-            echo ">>> Test Run $((retries+1)) ($test_cmd)..." >> "$log_file"
-            
-            # Check for command existence before running
-            local cmd_bin=$(echo "$test_cmd" | awk '{print $1}')
-            if ! command -v "$cmd_bin" &> /dev/null && [[ "$cmd_bin" != "echo" ]]; then
-                echo "⚠️ Test command '$cmd_bin' not found. Skipping tests." >> "$log_file"
-                break
-            fi
+            # Build or heal
+            if [[ $retries -eq 0 ]]; then
+                claude --dangerously-skip-permissions -p "$build_prompt" >> "$log_file" 2>&1
+            else
+                # Healing with review feedback
+                local heal_prompt="
+[PREVIOUS COMMIT] $(git log --oneline -1)
+[REVIEW FEEDBACK]
+$review_feedback
 
-            if eval "$test_cmd" >> "$log_file" 2>&1; then
-                echo "✅ Tests Passed" >> "$log_file"
-                success=true
+[INSTRUCTION]
+Fix the issues identified in the review. Then commit: git commit -am 'Agent: $name - Fix attempt $retries'
+"
+                claude --dangerously-skip-permissions -p "$heal_prompt" >> "$log_file" 2>&1
+            fi
+            
+            # Check if agent committed
+            if ! git log --oneline -1 2>/dev/null | grep -q "Agent: $name"; then
+                echo "⚠️ Agent did not commit, retrying..." >> "$log_file"
+                ((retries++))
+                continue
+            fi
+            
+            cd - > /dev/null
+            
+            # Run Review Agent
+            if run_review_agent "$id" "$name" "$worktree_path" "$domain"; then
+                echo "✅ Implementation passed review and tests" >> "$log_file"
                 break
             else
-                echo "⚠️ Test Failed. Healing..." >> "$log_file"
-                
-                # Extract error context
-                local error_log=$(tail -n 40 "$log_file")
-                
-                # Healer Prompt
-                local heal_prompt="
-                [ROLE] Code Healer
-                [ERROR LOG]
-                $error_log
-                
-                [INSTRUCTION]
-                Fix the code.
-                $write_instruction
-                "
-                
-                # Run Healer
-                claude -p "$heal_prompt" >> "$log_file" 2>&1
-                
-                # Apply Fixes (Write-Back)
-                python3 -c "$PYTHON_PATCHER" "$log_file" >> "$log_file" 2>&1
-                
-                retries=$((retries+1))
+                # Extract review feedback for next iteration
+                review_feedback=$(cat "$LOG_DIR/review_report_${id}.md")
+                echo "⚠️ Review failed, healing ($((retries+1))/$MAX_RETRIES)..." >> "$log_file"
+                ((retries++))
+                cd "$worktree_path"
             fi
         done
-
-        if [[ "$success" == "false" ]]; then
-            echo "❌ Module Failed after retries." >> "$log_file"
+        
+        if [[ $retries -ge $MAX_RETRIES ]]; then
+            echo "❌ Task failed after $MAX_RETRIES attempts" >> "$log_file"
+            cd - > /dev/null
+            exit 1
         fi
-
-        # --- 3. Linus Review ---
-        claude -p "[ROLE] Linus Torvalds. Review this work: $name. Be critical." >> "$log_file" 2>&1
-
-    ) & 
+        
+    ) &
     PIDS+=($!)
+    TASK_BRANCHES+=("$branch_name")
 }
-
-# ================= 🎬 Execution =================
-
-check_deps
-
-MODE=$(detect_mode)
-DOMAIN=$(detect_domain)
-
-echo -e "${YELLOW}🔥 VibeFlow v4.0 | Mode: $MODE | Domain: $DOMAIN | Balance: (Check Web UI)${NC}"
-
-# Init
-if [[ "$MODE" == "SCRATCH" ]]; then
-    git init
-    if [[ ! -f "REQUIREMENTS.md" ]]; then
-        echo "# $DOMAIN Requirements" > REQUIREMENTS.md
-        echo -e "${RED}⚠️  REQUIREMENTS.md created. Please edit it then re-run.${NC}"
-        exit 0
-    fi
-fi
-
-run_librarian "$MODE"
-run_architect
-
-# Parallel Execution
-declare -a PIDS
-TASK_COUNT=$(jq '. | length' "$PLAN_FILE")
-echo -e "${BLUE}⚡ Starting $TASK_COUNT parallel agents...${NC}"
-
-for ((i=0; i<$TASK_COUNT; i++)); do
-    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
-    t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
-    t_desc=$(jq -r ".[$i].desc" "$PLAN_FILE")
-    
-    run_agent_pipeline "$t_id" "$t_name" "$t_desc"
-    sleep 1
-done
 
 # --- 📊 Dashboard ---
 function monitor_progress() {
@@ -394,23 +638,125 @@ function monitor_progress() {
             activity=$(tail -n 1 "$latest_log" | cut -c 1-50)
         fi
         
-        # Display status
-        printf "\r${BLUE}%s Active Agents: %d | Last: %s...${NC}   " "${spinners[spin_idx]}" "$running" "$activity"
+        printf "\r${BLUE}%s Active: %d/%d | Last: %s...${NC}   " "${spinners[spin_idx]}" "$running" "$MAX_PARALLEL_AGENTS" "$activity"
         
         spin_idx=$(( (spin_idx + 1) % 10 ))
         sleep 0.5
     done
-    echo "" # New line after done
+    echo ""
 }
 
-echo -e "${YELLOW}⏳ Waiting for agents...${NC}"
-monitor_progress "${PIDS[@]}"
+# ================= 🎬 Execution =================
 
-# Report
-echo -e "${BLUE}🛡️  Generating Report...${NC}"
+check_deps
+
+MODE=$(detect_mode)
+DOMAIN=$(detect_domain)
+
+echo -e "${YELLOW}🔥 VibeFlow v5.0 (Git-Native) | Mode: $MODE | Domain: $DOMAIN${NC}"
+
+# Init
+if [[ "$MODE" == "SCRATCH" ]]; then
+    git init
+    if [[ ! -f "REQUIREMENTS.md" ]]; then
+        echo "# $DOMAIN Requirements" > REQUIREMENTS.md
+        echo -e "${RED}⚠️  REQUIREMENTS.md created. Please edit it then re-run.${NC}"
+        exit 0
+    fi
+fi
+
+# --- 🌿 Branch Management ---
+if ! git show-ref --verify --quiet refs/heads/vibe; then
+    echo -e "${BLUE}🌿 Creating 'vibe' branch...${NC}"
+    git checkout -b vibe
+else
+    echo -e "${BLUE}🌿 Switching to 'vibe' branch...${NC}"
+    git checkout vibe
+fi
+
+# Record starting state for CTO Review comparison
+START_HASH=$(git rev-parse HEAD 2>/dev/null || echo "EMPTY_TREE")
+if [[ "$START_HASH" == "EMPTY_TREE" ]]; then
+    # Empty repository - create initial commit
+    git commit --allow-empty -m "Initial commit for Vibe Flow session" > /dev/null 2>&1
+    START_HASH=$(git rev-parse HEAD)
+fi
+echo -e "${CYAN}📍 Session starting at commit: ${START_HASH:0:8}${NC}"
+
+run_librarian "$MODE"
+run_architect
+
+# Parallel Execution with Worktrees
+declare -a PIDS
+declare -a TASK_BRANCHES
+TASK_COUNT=$(jq '. | length' "$PLAN_FILE")
+
+# Ensure worktree directory exists
+mkdir -p .vibe_worktrees
+
+echo -e "${BLUE}⚡ Launching $TASK_COUNT tasks with worktrees (Max Parallel: $MAX_PARALLEL_AGENTS)...${NC}"
+
+# Launch tasks with parallelism control
+for ((i=0; i<TASK_COUNT; i++)); do
+    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
+    t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
+    t_desc=$(jq -r ".[$i].desc" "$PLAN_FILE")
+    
+    run_agent_pipeline "$t_id" "$t_name" "$t_desc"
+    
+    # Rate limiting: wait after every MAX_PARALLEL_AGENTS tasks
+    if (( (i + 1) % MAX_PARALLEL_AGENTS == 0 )); then
+        echo -e "${YELLOW}⏳ Waiting for batch to complete...${NC}"
+        monitor_progress "${PIDS[@]}"
+        PIDS=()
+    fi
+done
+
+# Wait for remaining tasks
+if [[ ${#PIDS[@]} -gt 0 ]]; then
+    echo -e "${YELLOW}⏳ Waiting for final batch...${NC}"
+    monitor_progress "${PIDS[@]}"
+fi
+
+# Merge all task branches
+merge_manager "${TASK_BRANCHES[@]}"
+
+# Cleanup worktrees
+echo -e "${BLUE}🧹 Cleaning up worktrees...${NC}"
+for ((i=0; i<TASK_COUNT; i++)); do
+    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
+    cleanup_task_worktree "$t_id"
+done
+
+# ==========================================
+# 🧩 Integration Phase (Team Feedback)
+# ==========================================
+echo ""
+echo -e "${YELLOW}═══════════════════════════════════════${NC}"
+echo -e "${YELLOW}   INTEGRATION & QUALITY ASSURANCE${NC}"
+echo -e "${YELLOW}═══════════════════════════════════════${NC}"
+
+# Run system-wide integration tests with healing
+if ! run_integration_phase "$DOMAIN"; then
+    echo -e "${RED}⚠️  Integration phase encountered issues. Check logs.${NC}"
+    # Don't exit - CTO review might still provide value
+fi
+
+# Run CTO architectural review
+run_cto_review "$START_HASH"
+
+# Final Report
+echo ""
+echo -e "${BLUE}🛡️  Generating Session Report...${NC}"
 git status > git_status.txt
-report_prompt="Summarize session. Input: $(cat "$PLAN_FILE"), Git: $(cat git_status.txt), Logs: .vibe_logs/*.md"
-claude -p "$report_prompt" > "$REPORT_FILE"
+report_prompt="Summarize session. Input: $(cat \"$PLAN_FILE\"), Git: $(cat git_status.txt), Logs: .vibe_logs/*.md"
+claude --dangerously-skip-permissions -p "$report_prompt" > "$REPORT_FILE"
 
 run_librarian "MAINTAIN"
-echo -e "${GREEN}🎉 Done. Report: $REPORT_FILE${NC}"
+echo ""
+echo -e "${GREEN}═══════════════════════════════════════${NC}"
+echo -e "${GREEN}🎉 Vibe Flow v5.0 Session Complete!${NC}"
+echo -e "${GREEN}═══════════════════════════════════════${NC}"
+echo -e "${CYAN}📊 Session Report: $REPORT_FILE${NC}"
+echo -e "${CYAN}🧐 CTO Review: vibe_cto_report.md${NC}"
+echo -e "${CYAN}📝 Logs: $LOG_DIR/${NC}"

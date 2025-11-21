@@ -1,9 +1,24 @@
-.vibe_logs/
+.vibe_logs
+raw_context.xml
 project_index.xml
 vibe_plan.json
 vibe_report.md
-raw_context.xml
+.DS_Store
+git_status.txt
 raw_plan_output.txt
 raw_plan.json
+
+# Vibe Flow v5.0 Worktrees
+.vibe_worktrees/
+
+# Common dependencies (agents handle per-worktree)
+node_modules/
+venv/
+__pycache__/
+*.pyc
+dist/
+build/
+.env
+*.egg-info/
 git_status.txt
 REVIEW_REPORT.md
