@@ -116,6 +116,23 @@ Vibe Flow follows a rigorous engineering pipeline:
 
 ---
 
+## 📚 Documentation / 文档
+
+Comprehensive documentation is available in the `docs/` directory:
+
+### English Documentation
+- [Getting Started](./docs/getting-started/) - Installation and quick start
+- [User Guides](./docs/guides/) - Complete usage guides
+- [References](./docs/references/) - API and configuration
+- [Reports](./docs/reports/) - Audit and review reports
+
+### 中文文档
+- [快速开始](./docs/zh/getting-started/) - 安装和快速开始
+- [用户指南](./docs/zh/guides/) - 完整使用指南
+- [参考资料](./docs/zh/references/) - API 和配置参考
+
+Full documentation index: [docs/README.md](./docs/README.md)
+
 ## 🤝 Contributing / 贡献
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md).
