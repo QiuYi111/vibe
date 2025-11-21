@@ -88,9 +88,10 @@ function create_task_worktree() {
 function cleanup_task_worktree() {
     local task_id="$1"
     local worktree_path=".vibe_worktrees/${task_id}"
-    
+
     if [[ -d "$worktree_path" ]]; then
-        git worktree remove "$worktree_path" --force 2>/dev/null
+        # Suppress git worktree remove output that causes cd confusion errors
+        git worktree remove "$worktree_path" --force >/dev/null 2>&1
     fi
 }
 
@@ -867,12 +868,12 @@ echo -e "${BLUE}🛡️  Generating Session Report...${NC}"
 git status > git_status.txt
 
 # Safe report prompt generation with file existence checks
-local plan_content="No plan file available"
+plan_content="No plan file available"
 if [[ -f "$PLAN_FILE" && -s "$PLAN_FILE" ]]; then
     plan_content=$(cat "$PLAN_FILE" 2>/dev/null || echo "Failed to read plan file")
 fi
 
-local git_status_content="No git status available"
+git_status_content="No git status available"
 if [[ -f "git_status.txt" && -s "git_status.txt" ]]; then
     git_status_content=$(cat git_status.txt 2>/dev/null || echo "Failed to read git status")
 fi
