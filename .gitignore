@@ -1,0 +1,9 @@
+.vibe_logs/
+project_index.xml
+vibe_plan.json
+vibe_report.md
+raw_context.xml
+raw_plan_output.txt
+raw_plan.json
+git_status.txt
+REVIEW_REPORT.md
