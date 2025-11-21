@@ -1,0 +1,8 @@
+.vibe_logs/
+.vibe_worktrees/
+*.log
+.DS_Store
+project_index.xml
+vibe_plan.json
+vibe_report.md
+REQUIREMENTS.md

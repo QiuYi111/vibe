@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Runtime Logs and Artifacts
+.vibe_logs/
+.vibe_worktrees/
+project_index.xml
+raw_context.xml
+raw_plan.json
+raw_plan_output.txt
+vibe_plan.json
+vibe_report.md
+vibe_cto_report.md
+git_status.txt
+
+# System
+.DS_Store
