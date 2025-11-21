@@ -1,0 +1,28 @@
+{
+  "name": "@jingyi_qiu/vibe-flow",
+  "version": "5.0.5",
+  "description": "Git-Native Autonomous Coding Engine powered by Claude",
+  "bin": {
+    "vibe": "./bin/vibe"
+  },
+  "scripts": {
+    "test": "echo \"Run 'vibe' locally to test\" && exit 0"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "coding",
+    "git",
+    "automation"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14"
+  },
+  "dependencies": {
+    "repomix": "^1.9.1"
+  },
+  "preferGlobal": true
+}
