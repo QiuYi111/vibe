@@ -1,6 +1,29 @@
 # Dependencies
 node_modules/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
 # Runtime Logs and Artifacts
 .vibe_logs/
 .vibe_worktrees/
@@ -12,6 +35,8 @@ vibe_plan.json
 vibe_report.md
 vibe_cto_report.md
 git_status.txt
+REVIEW_REPORT.md
 
 # System
 .DS_Store
+Thumbs.db

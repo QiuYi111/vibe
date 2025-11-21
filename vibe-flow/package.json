@@ -6,7 +6,8 @@
     "vibe": "./bin/vibe"
   },
   "scripts": {
-    "test": "echo \"Run 'vibe' locally to test\" && exit 0"
+    "test": "echo \"Run 'vibe' locally to test\" && exit 0",
+    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\""
   },
   "keywords": [
     "ai",
@@ -14,15 +15,25 @@
     "claude",
     "coding",
     "git",
-    "automation"
+    "automation",
+    "development",
+    "cli"
   ],
   "author": "Antigravity",
   "license": "MIT",
   "engines": {
-    "node": ">=14"
+    "node": ">=18"
   },
   "dependencies": {
     "repomix": "^1.9.1"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jingyi-qiu/vibe-flow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jingyi-qiu/vibe-flow/issues"
+  },
+  "homepage": "https://github.com/jingyi-qiu/vibe-flow#readme",
   "preferGlobal": true
 }

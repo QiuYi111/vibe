@@ -144,46 +144,25 @@ $diff_content
 If no tests are needed: echo 'No tests required'
 "
     
-    # Use subshell to avoid cd - dependency and get absolute path
-    local original_dir=$(pwd)
-
-    (
-        cd "$worktree_path" || {
-            echo "Error: Cannot cd to worktree_path: $worktree_path" >&2
-            exit 1
-        }
-
-        claude --dangerously-skip-permissions -p "$review_prompt" > "$review_report" 2>> "$review_log"
-
-        # Extract test command with retry mechanism
-        local retry_count=0
-        local max_retries=3
-        while [[ $retry_count -lt $max_retries ]]; do
-            if [[ -f "$review_report" ]]; then
-                grep -A1 "## Test Command" "$review_report" | tail -n1 | tr -d '`' > "$test_cmd_file"
-                break
-            else
-                echo "Review report not found, retrying ($((retry_count+1))/$max_retries)..." >> "$review_log"
-                sleep 1
-                ((retry_count++))
-            fi
-        done
-
-        # Run the test command
-        local test_cmd=$(cat "$test_cmd_file" 2>/dev/null || echo "echo 'No test command found'")
-        echo ">>> Running test: $test_cmd" >> "$review_log"
-
-        if eval "$test_cmd" >> "$review_log" 2>&1; then
-            echo "✅ Tests passed" >> "$review_log"
-            exit 0
-        else
-            echo "❌ Tests failed" >> "$review_log"
-            exit 1
-        fi
-    )
-
-    # Return the exit code from the subshell
-    return $?
+    cd "$worktree_path"
+    claude --dangerously-skip-permissions -p "$review_prompt" > "$review_report" 2>> "$review_log"
+    
+    # Extract test command
+    grep -A1 "## Test Command" "$review_report" | tail -n1 | tr -d '`' > "$test_cmd_file"
+    
+    # Run the test command
+    local test_cmd=$(cat "$test_cmd_file")
+    echo ">>> Running test: $test_cmd" >> "$review_log"
+    
+    if eval "$test_cmd" >> "$review_log" 2>&1; then
+        echo "✅ Tests passed" >> "$review_log"
+        cd - > /dev/null
+        return 0
+    else
+        echo "❌ Tests failed" >> "$review_log"
+        cd - > /dev/null
+        return 1
+    fi
 }
 
 # --- 🔀 Merge Manager (Orchestrates branch integration) ---
@@ -557,39 +536,14 @@ function run_architect() {
             claude --dangerously-skip-permissions -p "$fix_prompt" > raw_plan_output.txt
         fi
 
-        # Add file existence check before JSON extraction
-        local json_retry=0
-        local json_max_retries=3
-        local json_extracted=false
-
-        while [[ $json_retry -lt $json_max_retries && "$json_extracted" = false ]]; do
-            if [[ -f "raw_plan_output.txt" && -s "raw_plan_output.txt" ]]; then
-                if extract_json_block "raw_plan_output.txt" > raw_plan.json 2>/dev/null; then
-                    json_extracted=true
-                else
-                    echo "JSON extraction failed, retrying ($((json_retry+1))/$json_max_retries)..." >&2
-                    ((json_retry++))
-                    sleep 1
-                fi
-            else
-                echo "Waiting for raw_plan_output.txt to be created... ($((json_retry+1))/$json_max_retries)" >&2
-                ((json_retry++))
-                sleep 1
-            fi
-        done
-
-        if [[ "$json_extracted" = true && -f "raw_plan.json" && -s "raw_plan.json" ]]; then
-            if jq -e . raw_plan.json > "$PLAN_FILE" 2>/dev/null; then
-                echo -e "${GREEN}✅ Plan generated: $(jq '. | length' "$PLAN_FILE") tasks.${NC}"
-                rm raw_plan_output.txt raw_plan.json
-                success=true
-                break
-            else
-                echo "JSON validation failed" >&2
-                ((retry_count++))
-            fi
+        extract_json_block "raw_plan_output.txt" > raw_plan.json
+        
+        if jq -e . raw_plan.json > "$PLAN_FILE"; then
+            echo -e "${GREEN}✅ Plan generated: $(jq '. | length' "$PLAN_FILE") tasks.${NC}"
+            rm raw_plan_output.txt raw_plan.json
+            success=true
+            break
         else
-            echo "Failed to extract valid JSON from output" >&2
             ((retry_count++))
         fi
     done
@@ -638,17 +592,12 @@ function run_agent_pipeline() {
         
         # Execute Claude Code in worktree
         echo ">>> Agent working in $worktree_path..." > "$log_file"
-
-        # Change to worktree and verify it works
-        if ! cd "$worktree_path"; then
-            echo "❌ Failed to cd to worktree: $worktree_path" >> "$log_file"
-            exit 1
-        fi
-
+        cd "$worktree_path"
+        
         # Self-healing loop with Review Agent
         local retries=0
         local review_feedback=""
-
+        
         while [[ $retries -lt $MAX_RETRIES ]]; do
             # Build or heal
             if [[ $retries -eq 0 ]]; then
@@ -665,34 +614,32 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: $na
 "
                 claude --dangerously-skip-permissions -p "$heal_prompt" >> "$log_file" 2>&1
             fi
-
+            
             # Check if agent committed
             if ! git log --oneline -1 2>/dev/null | grep -q "Agent: $name"; then
                 echo "⚠️ Agent did not commit, retrying..." >> "$log_file"
                 ((retries++))
                 continue
             fi
-
-            # Run Review Agent (this function handles its own directory switching)
+            
+            cd - > /dev/null
+            
+            # Run Review Agent
             if run_review_agent "$id" "$name" "$worktree_path" "$domain"; then
                 echo "✅ Implementation passed review and tests" >> "$log_file"
                 break
             else
-                # Extract review feedback for next iteration with file existence check
-                local feedback_file="$LOG_DIR/review_report_${id}.md"
-                if [[ -f "$feedback_file" ]]; then
-                    review_feedback=$(cat "$feedback_file")
-                else
-                    review_feedback="Review failed but no feedback file found"
-                fi
+                # Extract review feedback for next iteration
+                review_feedback=$(cat "$LOG_DIR/review_report_${id}.md")
                 echo "⚠️ Review failed, healing ($((retries+1))/$MAX_RETRIES)..." >> "$log_file"
                 ((retries++))
-                # We're already in the worktree, no need to cd again
+                cd "$worktree_path"
             fi
         done
-
+        
         if [[ $retries -ge $MAX_RETRIES ]]; then
             echo "❌ Task failed after $MAX_RETRIES attempts" >> "$log_file"
+            cd - > /dev/null
             exit 1
         fi
         
@@ -865,19 +812,7 @@ run_cto_review "$START_HASH"
 echo ""
 echo -e "${BLUE}🛡️  Generating Session Report...${NC}"
 git status > git_status.txt
-
-# Safe report prompt generation with file existence checks
-local plan_content="No plan file available"
-if [[ -f "$PLAN_FILE" && -s "$PLAN_FILE" ]]; then
-    plan_content=$(cat "$PLAN_FILE" 2>/dev/null || echo "Failed to read plan file")
-fi
-
-local git_status_content="No git status available"
-if [[ -f "git_status.txt" && -s "git_status.txt" ]]; then
-    git_status_content=$(cat git_status.txt 2>/dev/null || echo "Failed to read git status")
-fi
-
-report_prompt="Summarize session. Input: $plan_content, Git: $git_status_content, Logs: .vibe_logs/*.md"
+report_prompt="Summarize session. Input: $(cat \"$PLAN_FILE\"), Git: $(cat git_status.txt), Logs: .vibe_logs/*.md"
 claude --dangerously-skip-permissions -p "$report_prompt" > "$REPORT_FILE"
 
 run_librarian "MAINTAIN"

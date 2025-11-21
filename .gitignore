@@ -1,24 +1,37 @@
-.vibe_logs
+# Vibe Flow artifacts
+.vibe_logs/
+.vibe_worktrees/
 raw_context.xml
 project_index.xml
 vibe_plan.json
 vibe_report.md
-.DS_Store
+vibe_cto_report.md
 git_status.txt
 raw_plan_output.txt
 raw_plan.json
+REVIEW_REPORT.md
 
-# Vibe Flow v5.0 Worktrees
-.vibe_worktrees/
-
-# Common dependencies (agents handle per-worktree)
+# Dependencies
 node_modules/
 venv/
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Build outputs
 dist/
 build/
+
+# Environment
 .env
-*.egg-info/
-git_status.txt
-REVIEW_REPORT.md
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# System
+.DS_Store
+Thumbs.db
