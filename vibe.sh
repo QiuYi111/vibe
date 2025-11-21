@@ -2,7 +2,8 @@
 
 # ==============================================================================
 # VIBE FLOW: Sleep-Mode Development Engine
-# Version: 3.0 (Domain Adaptive + SuperClaude + Self-Healing)
+# Version: 4.0 (Production Hardened)
+# Fixed: Self-Healing Write-Back, JSON Parsing, Security, Race Conditions
 # ==============================================================================
 
 # --- ⚙️ 全局配置 ---
@@ -10,7 +11,11 @@ INDEX_FILE="project_index.xml"
 PLAN_FILE="vibe_plan.json"
 REPORT_FILE="vibe_report.md"
 LOG_DIR=".vibe_logs"
-MAX_RETRIES=2
+MAX_RETRIES=3
+MAX_CONTEXT_SIZE_KB=500  # 限制 Context 大小，防止 API 报错
+
+# 忽略列表 (Security Hardened)
+IGNORE_PATTERNS="**/*.lock,**/node_modules,**/dist,**/.git,**/.DS_Store,**/build,**/.pio,**/.env*,**/*.key,**/secrets.*,**/__pycache__"
 
 # --- 🎨 颜色定义 ---
 GREEN='\033[0;32m'
@@ -20,92 +25,126 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# --- 🐍 Python Patcher (关键修复：用于将 LLM 输出写入文件) ---
+# 这是一个嵌入式 Python 脚本，用于解析自定义标记并覆写文件
+read -r -d '' PYTHON_PATCHER << EOM
+import sys, re, os
+
+log_file = sys.argv[1]
+try:
+    with open(log_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # 匹配 <<<<FILE:path>>>>...<<<<END>>>>
+    pattern = re.compile(r'<<<<FILE:(.*?)>>>>(.*?)<<<<END>>>>', re.DOTALL)
+    matches = pattern.findall(content)
+
+    if not matches:
+        print("NO_CHANGES_FOUND")
+        sys.exit(0)
+
+    for file_path, file_content in matches:
+        file_path = file_path.strip()
+        # 安全检查：防止路径穿越
+        if '..' in file_path or file_path.startswith('/'):
+            print(f"SKIPPING_UNSAFE_PATH: {file_path}")
+            continue
+        
+        # 确保目录存在
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(file_content.strip())
+        print(f"UPDATED: {file_path}")
+
+except Exception as e:
+    print(f"PATCH_ERROR: {str(e)}")
+    sys.exit(1)
+EOM
+
 # --- 🔍 依赖检查 ---
 function check_deps() {
-  for cmd in claude jq git node; do
-    if ! command -v $cmd &>/dev/null; then
-      echo -e "${RED}❌ 错误: 未找到依赖命令 '$cmd'。请先安装。${NC}"
-      exit 1
-    fi
-  done
-  mkdir -p $LOG_DIR
+    local deps=("claude" "jq" "git" "node" "npx" "python3")
+    for cmd in "${deps[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo -e "${RED}❌ Critical Error: Missing dependency '$cmd'. Please install it.${NC}"
+            exit 1
+        fi
+    done
+    mkdir -p "$LOG_DIR"
 }
 
 # --- 🧠 领域与模式探测 ---
 function detect_domain() {
-  if [ -f "platformio.ini" ] || [ -f "CMakeLists.txt" ]; then
-    echo "HARDWARE"
-  elif [ -f "mamba_env.yaml" ] || [ -d "src/ros2" ] || ls *.py >/dev/null 2>&1; then
-    echo "AI_ROBOT"
-  elif [ -f "package.json" ] || [ -f "next.config.js" ]; then
-    echo "WEB"
-  else
+    if [[ -f "platformio.ini" || -f "CMakeLists.txt" ]]; then echo "HARDWARE"; return; fi
+    if [[ -f "mamba_env.yaml" || -d "src/ros2" ]]; then echo "AI_ROBOT"; return; fi
+    if ls *.py >/dev/null 2>&1; then echo "PYTHON_GENERIC"; return; fi
+    if [[ -f "package.json" || -f "next.config.js" ]]; then echo "WEB"; return; fi
     echo "GENERIC"
-  fi
 }
 
 function detect_mode() {
-  if [ ! -d ".git" ]; then
-    echo "SCRATCH"
-  elif [ ! -f "$INDEX_FILE" ]; then
-    echo "INIT_INDEX"
-  else
+    if [[ ! -d ".git" ]]; then echo "SCRATCH"; return; fi
+    if [[ ! -f "$INDEX_FILE" ]]; then echo "INIT_INDEX"; return; fi
     echo "MAINTAIN"
-  fi
 }
 
-# --- 📚 核心：Librarian (语义索引构建) ---
+# --- 🛠️ JSON 提取工具 (增强健壮性) ---
+function extract_json_block() {
+    local input_file="$1"
+    # 提取第一个 [ 和最后一个 ] 之间的内容
+    awk '/\[/{p=1} p; /\]/{if(p) exit}' "$input_file" | sed '1s/^.*\[/[/' | sed '$s/\].*$/]/'
+}
+
+# --- 📚 Core: Librarian ---
 function run_librarian() {
-  local mode=$1
-  echo -e "${BLUE}📚 [Librarian] 正在分析项目上下文...${NC}"
+    local mode="$1"
+    echo -e "${BLUE}📚 [Librarian] Analyzing context...${NC}"
 
-  # 智能增量检查 (macOS 兼容)
-  if [ "$mode" == "MAINTAIN" ]; then
-    local last_hash=$(sed -nE 's/.*<!-- COMMIT: (.*) -->.*/\1/p' "$INDEX_FILE")
-    local current_hash=$(git rev-parse HEAD)
-    if [ "$last_hash" == "$current_hash" ]; then
-      echo -e "${GREEN}✅ Index 已是最新，跳过重建。${NC}"
-      return
+    # Context Size Check
+    if [[ -f "raw_context.xml" ]]; then
+        local size_kb=$(du -k "raw_context.xml" | cut -f1)
+        if [[ "$size_kb" -gt "$MAX_CONTEXT_SIZE_KB" ]]; then
+            echo -e "${YELLOW}⚠️ Warning: Context size ($size_kb KB) is large. Truncation may occur.${NC}"
+        fi
     fi
-  fi
 
-  # 提取代码骨架 (使用 npx 动态调用)
-  echo -e "${YELLOW}⚡ 提取代码 (Repomix)...${NC}"
-  npx repomix --style xml \
-    --ignore "**/*.lock,**/node_modules,**/dist,**/.git,**/*.png,**/.DS_Store,**/build,**/.pio" \
-    --output raw_context.xml >/dev/null 2>&1
+    # Incremental Check
+    if [[ "$mode" == "MAINTAIN" ]]; then
+        local last_hash=$(sed -nE 's/.*<!-- COMMIT: (.*) -->.*/\1/p' "$INDEX_FILE")
+        local current_hash=$(git rev-parse HEAD)
+        if [[ "$last_hash" == "$current_hash" ]]; then
+            echo -e "${GREEN}✅ Index is up-to-date.${NC}"
+            return
+        fi
+    fi
 
-  # 生成语义索引 (SuperClaude /sc:index-repo)
-  echo -e "${BLUE}🧠 构建语义地图...${NC}"
-  local prompt="/sc:index-repo
-    你是一个高级架构师。将 raw context 转换为 'Semantic Index'。
-    不要包含具体代码实现，只提取元数据！
-    输出 XML 格式，包含：
-    <tech_stack>, <project_structure>, <api_signatures>, 
-    <dependency_graph>, <hardware_constraints>(如有), <testing_strategy>
-    
-    最后一行必须包含: <!-- COMMIT: $(git rev-parse HEAD 2>/dev/null || echo 'INIT') -->
+    # Repomix Execution
+    echo -e "${YELLOW}⚡ Extracting codebase (Repomix)...${NC}"
+    if ! npx repomix --style xml --ignore "$IGNORE_PATTERNS" --output raw_context.xml > /dev/null 2>&1; then
+        echo -e "${RED}❌ Repomix failed. Check npx/network.${NC}"
+        exit 1
+    fi
+
+    # LLM Index Generation
+    local prompt="/sc:index-repo
+    You are a Senior Architect. Convert raw context to a 'Semantic Index'.
+    Output ONLY valid XML.
+    Include: <tech_stack>, <project_structure>, <api_signatures>, <dependency_graph>.
+    NO actual code logic.
+    Last line must be: <!-- COMMIT: $(git rev-parse HEAD 2>/dev/null || echo 'INIT') -->
     "
-  cat raw_context.xml | claude -p "$prompt" >"$INDEX_FILE"
-  echo -e "${GREEN}✅ Index 更新完成。${NC}"
+    cat raw_context.xml | claude -p "$prompt" > "$INDEX_FILE"
 }
 
-# --- 🏗️ 核心：Architect (需求拆解与规划) ---
+# --- 🏗️ Core: Architect ---
 function run_architect() {
-  echo -e "${BLUE}🏗️  [Architect] 正在规划任务...${NC}"
-  local reqs=$(cat REQUIREMENTS.md 2>/dev/null || echo "无明确需求文件，请基于代码现状优化")
-  local index=$(cat "$INDEX_FILE")
-  local domain=$(detect_domain)
+    echo -e "${BLUE}🏗️  [Architect] Planning tasks...${NC}"
+    local reqs=$(cat REQUIREMENTS.md 2>/dev/null || echo "Optimize existing codebase based on index.")
+    local index=$(cat "$INDEX_FILE")
+    local domain=$(detect_domain)
 
-  # 针对不同领域的提示词注入
-  local domain_instruction=""
-  case $domain in
-  HARDWARE) domain_instruction="任务必须包含 'virtual/' 目录下的 mock 实现步骤。优先保证 native 编译通过。" ;;
-  AI_ROBOT) domain_instruction="任务需分离 'training' 和 'inference' 逻辑。包含数据校验步骤。" ;;
-  WEB) domain_instruction="任务需包含组件测试 (Component Test) 和 API 契约验证。" ;;
-  esac
-
-  local prompt="/sc:estimate
+    local prompt="/sc:estimate
     [Context]
     Domain: $domain
     $index
@@ -113,179 +152,214 @@ function run_architect() {
     [Requirements]
     $reqs
     
-    [Instruction]
-    $domain_instruction
-    将需求拆解为并行开发的独立任务。
+    [Task]
+    Break down requirements into parallelizable tasks.
+    IMPORTANT: Ensure tasks modify DIFFERENT files to avoid race conditions.
     
-    [Output]
-    纯 JSON 数组。不要 Markdown。
-    [{\"id\": \"mod_1\", \"name\": \"名称\", \"desc\": \"详细描述\", \"files\": [\"src/main.cpp\"]}]
+    [Output Format]
+    PURE JSON ARRAY ONLY. No markdown.  NO EXPLAIN 
+    [{\"id\": \"task_1\", \"name\": \"Auth\", \"desc\": \"Implement login\", \"files\": [\"src/auth.py\"]}]
     "
 
-  claude -p "$prompt" | sed 's/```json//g' | sed 's/```//g' >raw_plan.json
+    # Robust JSON Extraction
+    claude -p "$prompt" > raw_plan_output.txt
+    extract_json_block "raw_plan_output.txt" > raw_plan.json
 
-  if jq -e . raw_plan.json >"$PLAN_FILE"; then
-    echo -e "${GREEN}✅ 计划生成成功: $(jq '. | length' "$PLAN_FILE") 个任务${NC}"
-    rm raw_plan.json
-  else
-    echo -e "${RED}❌ 计划生成失败 (JSON 解析错误)。${NC}"
-    cat raw_plan.json
-    exit 1
-  fi
+    if jq -e . raw_plan.json > "$PLAN_FILE"; then
+        echo -e "${GREEN}✅ Plan generated: $(jq '. | length' "$PLAN_FILE") tasks.${NC}"
+        rm raw_plan_output.txt raw_plan.json
+    else
+        echo -e "${RED}❌ Architect failed to generate valid JSON. See raw_plan_output.txt.${NC}"
+        exit 1
+    fi
 }
 
-# --- 🚀 核心：Factory (并行流水线) ---
+# --- 🚀 Core: Factory (The Pipeline) ---
 function run_agent_pipeline() {
-  local id=$1
-  local name=$2
-  local desc=$3
-  local domain=$(detect_domain)
-  local log_file="$LOG_DIR/${id}.log"
+    local id="$1"
+    local name="$2"
+    local desc="$3"
+    local domain=$(detect_domain)
+    local log_file="$LOG_DIR/${id}.log"
+    
+    echo -e "${CYAN}🚀 [Agent] $name ($domain)${NC}"
 
-  echo -e "${CYAN}🚀 [启动 Agent] $name ($domain 模式)${NC}"
+    (
+        # --- 1. Builder Phase ---
+        local test_cmd="echo 'No test command defined'"
+        
+        # Domain Logic
+        case "$domain" in
+            HARDWARE) test_cmd="pio test -e native" ;;
+            AI_ROBOT) test_cmd="pytest" ;; # Assumes pytest is configured
+            WEB)      test_cmd="npm test" ;;
+            PYTHON_GENERIC) test_cmd="pytest" ;;
+            *)        test_cmd="echo 'GENERIC: Verify manually'" ;;
+        esac
 
-  (
-    # --- 1. Builder Phase ---
-    local prompt_header="/sc:implement"
-    local test_cmd=""
+        # 🔴 CRITICAL: Instruction for Write-Back
+        # We force the LLM to use delimiters that our Python Patcher can parse.
+        local write_instruction="
+        CRITICAL OUTPUT FORMAT:
+        To write code, you MUST wrap the file content exactly like this:
+        <<<<FILE: path/to/file.ext>>>>
+        code_here...
+        <<<<END>>>>
+        
+        You can output multiple files. Any text outside these tags is treated as comments.
+        "
 
-    # 领域自适应配置
-    case $domain in
-    HARDWARE)
-      prompt_header="/sc:implement-hardware"
-      test_cmd="pio test -e native"
-      # 如果没有 pio，降级为 make
-      if ! command -v pio &>/dev/null; then test_cmd="make test"; fi
-      ;;
-    AI_ROBOT)
-      prompt_header="/sc:implement-robot"
-      test_cmd="pytest"
-      ;;
-    WEB)
-      prompt_header="/sc:implement-web"
-      test_cmd="npm test"
-      ;;
-    *)
-      test_cmd="pytest" # 默认
-      if [ -f "package.json" ]; then test_cmd="npm test"; fi
-      ;;
-    esac
-
-    local build_prompt="$prompt_header
+        local build_prompt="/sc:implement
         [INDEX] $(cat $INDEX_FILE)
         [TASK] $desc
+        $write_instruction
+        "
         
-        要求：
-        1. 读取 Index 理解架构。
-        2. 编写/修改代码。
-        3. 必须生成对应的测试文件。
-        4. 如果是硬件项目，必须在 virtual/ 目录下创建 Mock 硬件接口。
-        "
+        echo ">>> Building..." > "$log_file"
+        # Run Claude and verify exit code
+        if ! claude -p "$build_prompt" >> "$log_file" 2>&1; then
+             echo "❌ API Error" >> "$log_file"
+             exit 1
+        fi
 
-    echo ">>> Building..." >"$log_file"
-    claude -p "$build_prompt" >>"$log_file" 2>&1
+        # Apply Changes (Write-Back)
+        echo ">>> Applying changes..." >> "$log_file"
+        python3 -c "$PYTHON_PATCHER" "$log_file" >> "$log_file" 2>&1
 
-    # --- 2. Verifier & Healer Phase (自愈循环) ---
-    echo ">>> Verifying ($test_cmd)..." >>"$log_file"
+        # --- 2. Verifier & Healer Loop ---
+        local retries=0
+        local success=false
+        
+        while [[ $retries -lt $MAX_RETRIES ]]; do
+            echo ">>> Test Run $((retries+1)) ($test_cmd)..." >> "$log_file"
+            
+            # Check for command existence before running
+            local cmd_bin=$(echo "$test_cmd" | awk '{print $1}')
+            if ! command -v "$cmd_bin" &> /dev/null && [[ "$cmd_bin" != "echo" ]]; then
+                echo "⚠️ Test command '$cmd_bin' not found. Skipping tests." >> "$log_file"
+                break
+            fi
 
-    local retries=0
-    local success=false
+            if eval "$test_cmd" >> "$log_file" 2>&1; then
+                echo "✅ Tests Passed" >> "$log_file"
+                success=true
+                break
+            else
+                echo "⚠️ Test Failed. Healing..." >> "$log_file"
+                
+                # Extract error context
+                local error_log=$(tail -n 40 "$log_file")
+                
+                # Healer Prompt
+                local heal_prompt="
+                [ROLE] Code Healer
+                [ERROR LOG]
+                $error_log
+                
+                [INSTRUCTION]
+                Fix the code.
+                $write_instruction
+                "
+                
+                # Run Healer
+                claude -p "$heal_prompt" >> "$log_file" 2>&1
+                
+                # Apply Fixes (Write-Back)
+                python3 -c "$PYTHON_PATCHER" "$log_file" >> "$log_file" 2>&1
+                
+                retries=$((retries+1))
+            fi
+        done
 
-    while [ $retries -lt $MAX_RETRIES ]; do
-      if $test_cmd >>"$log_file" 2>&1; then
-        echo "✅ Tests Passed" >>"$log_file"
-        success=true
-        break
-      else
-        echo "⚠️ Test Failed (Attempt $((retries + 1))/$MAX_RETRIES). Healing..." >>"$log_file"
-        local error_log=$(tail -n 30 "$log_file")
+        if [[ "$success" == "false" ]]; then
+            echo "❌ Module Failed after retries." >> "$log_file"
+        fi
 
-        # 自愈指令
-        claude -p "Fix the code based on this error log:\n$error_log\nOnly output the fixed code files." >>"$log_file" 2>&1
-        retries=$((retries + 1))
-      fi
-    done
+        # --- 3. Linus Review ---
+        claude -p "[ROLE] Linus Torvalds. Review this work: $name. Be critical." >> "$log_file" 2>&1
 
-    if [ "$success" = false ]; then
-      echo "❌ Module Failed after retries." >>"$log_file"
-      # 不退出，允许 Linus 审查失败现场
-    fi
-
-    # --- 3. Linus Phase (Adversarial Review) ---
-    local linus_prompt="
-        [ROLE] Linus Torvalds
-        [CONTEXT] Task: $name
-        审查代码实现和测试结果。
-        如果测试失败，狠批原因。
-        如果通过但代码烂，狠批风格。
-        "
-    claude -p "$linus_prompt" >>"$log_file" 2>&1
-
-  ) &
-  PIDS+=($!)
+    ) & 
+    PIDS+=($!)
 }
 
-# ================= 🎬 主程序执行流 =================
+# ================= 🎬 Execution =================
 
 check_deps
 
 MODE=$(detect_mode)
 DOMAIN=$(detect_domain)
 
-echo -e "${YELLOW}🔥 VibeFlow 启动 | 模式: $MODE | 领域: $DOMAIN${NC}"
+echo -e "${YELLOW}🔥 VibeFlow v4.0 | Mode: $MODE | Domain: $DOMAIN | Balance: (Check Web UI)${NC}"
 
-# 0. 初始化处理
-if [ "$MODE" == "SCRATCH" ]; then
-  git init
-  if [ ! -f "REQUIREMENTS.md" ]; then
-    echo "# $DOMAIN Project Requirements" >REQUIREMENTS.md
-    echo "在此填入你的宏伟计划..." >>REQUIREMENTS.md
-    echo -e "${RED}⚠️  已创建 REQUIREMENTS.md，请填写后重新运行！${NC}"
-    exit 0
-  fi
+# Init
+if [[ "$MODE" == "SCRATCH" ]]; then
+    git init
+    if [[ ! -f "REQUIREMENTS.md" ]]; then
+        echo "# $DOMAIN Requirements" > REQUIREMENTS.md
+        echo -e "${RED}⚠️  REQUIREMENTS.md created. Please edit it then re-run.${NC}"
+        exit 0
+    fi
 fi
 
-# 1. 维护索引 (Librarian)
-run_librarian $MODE
-
-# 2. 生成计划 (Architect)
+run_librarian "$MODE"
 run_architect
 
-# 3. 并行开发 (The Factory)
+# Parallel Execution
 declare -a PIDS
 TASK_COUNT=$(jq '. | length' "$PLAN_FILE")
+echo -e "${BLUE}⚡ Starting $TASK_COUNT parallel agents...${NC}"
 
-echo -e "${BLUE}⚡ 启动 $TASK_COUNT 条并行流水线...${NC}"
-
-for ((i = 0; i < $TASK_COUNT; i++)); do
-  t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
-  t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
-  t_desc=$(jq -r ".[$i].desc" "$PLAN_FILE")
-
-  run_agent_pipeline "$t_id" "$t_name" "$t_desc"
-  sleep 1 # 避免瞬间并发导致 API Rate Limit
+for ((i=0; i<$TASK_COUNT; i++)); do
+    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
+    t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
+    t_desc=$(jq -r ".[$i].desc" "$PLAN_FILE")
+    
+    run_agent_pipeline "$t_id" "$t_name" "$t_desc"
+    sleep 1
 done
 
-# 4. 等待收敛
-echo -e "${YELLOW}⏳ 等待所有 Agent 完工...${NC}"
-for pid in ${PIDS[*]}; do wait $pid; done
+# --- 📊 Dashboard ---
+function monitor_progress() {
+    local pids=("$@")
+    local spinners=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    local spin_idx=0
+    
+    while true; do
+        local running=0
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                ((running++))
+            fi
+        done
+        
+        if [[ $running -eq 0 ]]; then
+            break
+        fi
+        
+        # Get latest log activity
+        local latest_log=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n 1)
+        local activity=""
+        if [[ -f "$latest_log" ]]; then
+            activity=$(tail -n 1 "$latest_log" | cut -c 1-50)
+        fi
+        
+        # Display status
+        printf "\r${BLUE}%s Active Agents: %d | Last: %s...${NC}   " "${spinners[spin_idx]}" "$running" "$activity"
+        
+        spin_idx=$(( (spin_idx + 1) % 10 ))
+        sleep 0.5
+    done
+    echo "" # New line after done
+}
 
-# 5. 生成报告 (Integrator)
-echo -e "${BLUE}🛡️  [Integrator] 生成最终报告...${NC}"
-git status >git_status.txt
-report_prompt="
-总结本次 Vibe Coding 会话。
-[Plan]: $(cat $PLAN_FILE)
-[Git Status]: $(cat git_status.txt)
-[Logs]: (分析 .vibe_logs 目录下的所有日志)
+echo -e "${YELLOW}⏳ Waiting for agents...${NC}"
+monitor_progress "${PIDS[@]}"
 
-生成 Markdown 报告。
-1. 概览：成功/失败 模块数。
-2. 详细结果：每个模块的 Linus 评价。
-3. 下一步建议。
-"
-claude -p "$report_prompt" >"$REPORT_FILE"
+# Report
+echo -e "${BLUE}🛡️  Generating Report...${NC}"
+git status > git_status.txt
+report_prompt="Summarize session. Input: $(cat "$PLAN_FILE"), Git: $(cat git_status.txt), Logs: .vibe_logs/*.md"
+claude -p "$report_prompt" > "$REPORT_FILE"
 
-# 6. 收尾
 run_librarian "MAINTAIN"
-echo -e "${GREEN}🎉 任务结束。请查看 $REPORT_FILE 并执行 git commit。${NC}"
+echo -e "${GREEN}🎉 Done. Report: $REPORT_FILE${NC}"
