@@ -92,8 +92,22 @@ function detect_mode() {
 # --- 🛠️ JSON 提取工具 (增强健壮性) ---
 function extract_json_block() {
     local input_file="$1"
-    # 提取第一个 [ 和最后一个 ] 之间的内容
-    awk '/\[/{p=1} p; /\]/{if(p) exit}' "$input_file" | sed '1s/^.*\[/[/' | sed '$s/\].*$/]/'
+    # 1. 尝试提取 ```json ... ``` 块
+    # 2. 如果没有代码块，尝试提取 [ ... ]
+    # 3. 清理非 JSON 字符
+    
+    local content=$(cat "$input_file")
+    
+    if echo "$content" | grep -q "^\`\`\`json"; then
+        # 提取 markdown 代码块
+        echo "$content" | sed -n '/^```json/,/^```/p' | sed '1d;$d'
+    elif echo "$content" | grep -q "^\`\`\`"; then
+         # 提取通用代码块
+        echo "$content" | sed -n '/^```/,/^```/p' | sed '1d;$d'
+    else
+        # 提取第一个 [ 和最后一个 ] 之间的内容 (原有逻辑增强)
+        awk '/\[/{p=1} p; /\]/{if(p) exit}' "$input_file" | sed '1s/^.*\[/[/' | sed '$s/\].*$/]/'
+    fi
 }
 
 # --- 📚 Core: Librarian ---
@@ -144,7 +158,8 @@ function run_architect() {
     local index=$(cat "$INDEX_FILE")
     local domain=$(detect_domain)
 
-    local prompt="/sc:estimate
+    # 基础 Prompt
+    local base_prompt="/sc:estimate
     [Context]
     Domain: $domain
     $index
@@ -157,19 +172,55 @@ function run_architect() {
     IMPORTANT: Ensure tasks modify DIFFERENT files to avoid race conditions.
     
     [Output Format]
-    PURE JSON ARRAY ONLY. No markdown.  NO EXPLAIN 
+    RETURN ONLY A RAW JSON ARRAY. 
+    DO NOT wrap in markdown code blocks (no \`\`\`).
+    DO NOT include any explanation or text before/after the JSON.
+    Example:
     [{\"id\": \"task_1\", \"name\": \"Auth\", \"desc\": \"Implement login\", \"files\": [\"src/auth.py\"]}]
     "
 
-    # Robust JSON Extraction
-    claude -p "$prompt" > raw_plan_output.txt
-    extract_json_block "raw_plan_output.txt" > raw_plan.json
+    local retry_count=0
+    local max_retries=3
+    local success=false
 
-    if jq -e . raw_plan.json > "$PLAN_FILE"; then
-        echo -e "${GREEN}✅ Plan generated: $(jq '. | length' "$PLAN_FILE") tasks.${NC}"
-        rm raw_plan_output.txt raw_plan.json
-    else
-        echo -e "${RED}❌ Architect failed to generate valid JSON. See raw_plan_output.txt.${NC}"
+    while [ $retry_count -lt $max_retries ]; do
+        if [ $retry_count -eq 0 ]; then
+            # 首次尝试
+            claude -p "$base_prompt" > raw_plan_output.txt
+        else
+            # 重试逻辑：将错误反馈给 LLM
+            echo -e "${YELLOW}⚠️ JSON Parse Error. Retrying ($retry_count/$max_retries)...${NC}"
+            local error_msg=$(jq -e . raw_plan.json 2>&1)
+            local fix_prompt="
+            [System]
+            The previous JSON output was invalid.
+            Error: $error_msg
+            
+            [Previous Output]
+            $(cat raw_plan_output.txt)
+            
+            [Instruction]
+            Fix the JSON syntax. Output ONLY the valid JSON array.
+            "
+            claude -p "$fix_prompt" > raw_plan_output.txt
+        fi
+
+        # 尝试提取和解析
+        extract_json_block "raw_plan_output.txt" > raw_plan.json
+        
+        if jq -e . raw_plan.json > "$PLAN_FILE"; then
+            echo -e "${GREEN}✅ Plan generated: $(jq '. | length' "$PLAN_FILE") tasks.${NC}"
+            rm raw_plan_output.txt raw_plan.json
+            success=true
+            break
+        else
+            ((retry_count++))
+        fi
+    done
+
+    if [ "$success" = false ]; then
+        echo -e "${RED}❌ Architect failed to generate valid JSON after $max_retries retries.${NC}"
+        echo -e "${RED}Debug: See raw_plan_output.txt${NC}"
         exit 1
     fi
 }
