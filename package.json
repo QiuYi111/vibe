@@ -1,0 +1,13 @@
+{
+  "name": "vibe-integration",
+  "version": "1.0.0",
+  "description": "Integration test coordinator for Vibe project",
+  "private": true,
+  "scripts": {
+    "test": "cd vibe-flow && npm test",
+    "postinstall": "cd vibe-flow && npm install"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
