@@ -2,19 +2,15 @@
 
 # ==============================================================================
 # VIBE FLOW: Git-Native Autonomous Coding Engine
-# Version: 0.1.7 (Git-Native Edition)
+# Version: 5.0 (Git-Native Edition)
 # Architecture: Worktree-based parallel development with AI-powered merge resolution
 # ==============================================================================
 
-# --- ⚙️ 全局配置 (Fixed with Absolute Paths) ---
-# 获取当前项目根目录的绝对路径
-PROJECT_ROOT=$(pwd)
-
-# 使用绝对路径定义关键文件和目录
-INDEX_FILE="${PROJECT_ROOT}/project_index.xml"
-PLAN_FILE="${PROJECT_ROOT}/vibe_plan.json"
-REPORT_FILE="${PROJECT_ROOT}/vibe_report.md"
-LOG_DIR="${PROJECT_ROOT}/.vibe_logs"
+# --- ⚙️ 全局配置 ---
+INDEX_FILE="project_index.xml"
+PLAN_FILE="vibe_plan.json"
+REPORT_FILE="vibe_report.md"
+LOG_DIR=".vibe_logs"
 MAX_RETRIES=3
 MAX_CONTEXT_SIZE_KB=500
 MAX_PARALLEL_AGENTS=${MAX_PARALLEL_AGENTS:-2}
@@ -55,35 +51,37 @@ function show_banner() {
 # Create isolated worktree for a task
 function create_task_worktree() {
     local task_id="$1"
-    local timestamp=$(date +%s)
-    local branch_name="vibe-task_${task_id}_${timestamp}"
+    local branch_name="feat/task_${task_id}"
     local worktree_path=".vibe_worktrees/${task_id}"
 
-    # Create worktree directory - fail fast if we can't
-    mkdir -p ".vibe_worktrees" || return 1
+    # Ensure worktree directory exists FIRST
+    if ! mkdir -p ".vibe_worktrees"; then
+        echo "Error: Failed to create .vibe_worktrees directory" >&2
+        return 1
+    fi
 
-    # Clean up any existing worktree for this task
+    # Remove existing worktree if it exists (cleanup from failed runs)
     if [[ -d "$worktree_path" ]]; then
-        git worktree remove "$worktree_path" --force >/dev/null 2>&1
-        rm -rf "$worktree_path" >/dev/null 2>&1
+        git worktree remove "$worktree_path" --force 2>/dev/null
     fi
 
-    # Create worktree with unique branch - suppress all output to avoid contamination
-    if ! git worktree add -b "$branch_name" "$worktree_path" >/dev/null 2>&1; then
-        echo "Error: Failed to create worktree for task $task_id" >&2
-        echo "Branch: $branch_name, Path: $worktree_path" >&2
+    # Create branch and worktree
+    if ! git worktree add -b "$branch_name" "$worktree_path" 2>/dev/null; then
+        # Branch might already exist, try without -b
+        if ! git worktree add "$worktree_path" "$branch_name" 2>/dev/null; then
+            echo "Error: Failed to create worktree for $task_id" >&2
+            return 1
+        fi
+    fi
+
+    # Verify worktree was created successfully
+    if [[ ! -d "$worktree_path" ]]; then
+        echo "Error: Worktree directory was not created: $worktree_path" >&2
         return 1
     fi
 
-    # Verify the worktree directory exists and is a valid git worktree
-    if [[ ! -d "$worktree_path" || ! -f "$worktree_path/.git" ]]; then
-        echo "Error: Worktree verification failed for $task_id" >&2
-        return 1
-    fi
-
-    # Return absolute path - ensure we use current working directory
-    local current_dir=$(pwd)
-    echo "${current_dir}/${worktree_path}"
+    # Get absolute path to avoid any cd confusion
+    echo "$(pwd)/$worktree_path"
 }
 
 # Cleanup worktree after completion
@@ -91,10 +89,9 @@ function cleanup_task_worktree() {
     local task_id="$1"
     local worktree_path=".vibe_worktrees/${task_id}"
 
-    # Remove worktree cleanly if it exists
     if [[ -d "$worktree_path" ]]; then
+        # Suppress git worktree remove output that causes cd confusion errors
         git worktree remove "$worktree_path" --force >/dev/null 2>&1
-        rm -rf "$worktree_path" >/dev/null 2>&1
     fi
 }
 
@@ -107,10 +104,7 @@ function run_review_agent() {
     local review_log="$LOG_DIR/review_${task_id}.log"
     local review_report="$LOG_DIR/review_report_${task_id}.md"
     local test_cmd_file="$LOG_DIR/test_cmd_${task_id}.txt"
-
-    # Ensure log directory exists before writing
-    mkdir -p "$LOG_DIR"
-
+    
     echo -e "${BLUE}🔍 [Review Agent] Analyzing task: $task_name${NC}"
     
     # Get changes in worktree
@@ -200,6 +194,12 @@ function merge_manager() {
     echo -e "${BLUE}🔀 [Merge Manager] Integrating ${#task_branches[@]} branches...${NC}"
     
     for branch in "${task_branches[@]}"; do
+        # Check if branch exists
+        if ! git show-ref --verify --quiet "refs/heads/$branch"; then
+             echo -e "${YELLOW}⚠️  Branch $branch not found. Skipping merge.${NC}"
+             continue
+        fi
+
         if git merge --no-edit "$branch" > /dev/null 2>&1; then
             echo -e "${GREEN}✅ Merged $branch${NC}"
         else
@@ -214,10 +214,7 @@ function run_mediator() {
     local conflicted_branch="$1"
     local conflict_files=$(git diff --name-only --diff-filter=U)
     local mediator_log="$LOG_DIR/mediator_${conflicted_branch}.log"
-
-    # Ensure log directory exists before writing
-    mkdir -p "$LOG_DIR"
-
+    
     # Generate conflict context
     local conflict_diff=$(git diff)
     
@@ -266,10 +263,7 @@ Be decisive. This is your codebase now.
 function run_integration_phase() {
     local domain="$1"
     local log_file="$LOG_DIR/integration_system.log"
-
-    # Ensure log directory exists before writing
-    mkdir -p "$LOG_DIR"
-
+    
     echo -e "${BLUE}🧩 [Integration] Starting System-Wide Verification...${NC}"
     echo ">>> Starting Integration Phase" > "$log_file"
 
@@ -436,33 +430,12 @@ EOM
 # --- 🔍 依赖检查 ---
 function check_deps() {
     local deps=("claude" "jq" "git" "node" "npx" "python3")
-    local optionalDeps=("tmux")
-
-    # 检查关键依赖
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             echo -e "${RED}❌ Critical Error: Missing dependency '$cmd'. Please install it.${NC}"
             exit 1
         fi
     done
-
-    # 检查可选依赖
-    local missingOptional=()
-    for cmd in "${optionalDeps[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            missingOptional+=("$cmd")
-        fi
-    done
-
-    # 警告缺少的可选依赖
-    if [ ${#missingOptional[@]} -gt 0 ]; then
-        echo -e "${YELLOW}⚠️  Warning: Missing optional dependencies: ${missingOptional[*]}${NC}"
-        echo -e "${BLUE}   These are not required, but some features may be unavailable:${NC}"
-        echo -e "${BLUE}   - tmux: Enables interactive task debugging and intervention${NC}"
-        echo -e "${BLUE}   Install with: brew install tmux (macOS) or apt-get install tmux (Ubuntu)${NC}"
-        echo ""
-    fi
-
     mkdir -p "$LOG_DIR"
 }
 
@@ -635,47 +608,28 @@ function run_architect() {
 }
 
 # --- 🚀 Core: Factory (The Pipeline) ---
-function run_agent_in_worktree() {
+function run_agent_pipeline() {
     local id="$1"
     local name="$2"
     local desc="$3"
-    local worktree_path="$4"
     local domain=$(detect_domain)
     local log_file="$LOG_DIR/${id}.log"
-
-    # Ensure log directory exists before writing
-    mkdir -p "$LOG_DIR"
-
-    echo -e "${CYAN}🚀 [Agent] $name (Task ID: $id)${NC}"
+    local branch_name="feat/task_${id}"
+    
+    echo -e "${CYAN}🚀 [Agent] $name (Worktree: $branch_name)${NC}"
 
     (
-        # Use the pre-created worktree
-
-        # Defensive programming: sanitize worktree path from potential contamination
-        worktree_path=$(echo "$worktree_path" | tr -d '\n\r')
-
-        # Change to worktree and verify it's a valid git repository
-        cd "$worktree_path" || {
-            echo "❌ Cannot access worktree: $worktree_path" >> "$log_file"
-            echo "   Directory exists: $([[ -d "$worktree_path" ]] && echo 'YES' || echo 'NO')" >> "$log_file"
-            exit 1
-        }
-
-        local actual_branch_name=$(git branch --show-current 2>/dev/null || echo "unknown")
-        echo ">>> Working in $(pwd) on branch: $actual_branch_name" >> "$log_file"
-
-        # Check if index file exists before using it
-        local index_content=""
-        if [[ -f "$INDEX_FILE" && -s "$INDEX_FILE" ]]; then
-            index_content=$(cat "$INDEX_FILE")
-        else
-            echo "❌ Index file $INDEX_FILE not found or empty" >> "$log_file"
+        # Create isolated worktree
+        local worktree_path=$(create_task_worktree "$id")
+        
+        if [[ -z "$worktree_path" ]]; then
+            echo "❌ Failed to create worktree" >> "$log_file"
             exit 1
         fi
-
+        
         # Initial build prompt (NO custom delimiters, NO hardcoded tests)
         local build_prompt="/sc:implement
-[INDEX] $index_content
+[INDEX] $(cat $INDEX_FILE)
 [TASK] $desc
 [WORKTREE] $worktree_path
 [DOMAIN] $domain
@@ -689,13 +643,14 @@ function run_agent_in_worktree() {
 6. Use existing dependencies if available to save time
 "
         
-        # Initialize log and start work
-        {
-            echo ">>> Agent: $name (Task ID: $id)"
-            echo ">>> Worktree: $worktree_path"
-            echo ">>> Branch: $actual_branch_name"
-            echo ">>> Started at: $(date)"
-        } > "$log_file"
+        # Execute Claude Code in worktree
+        echo ">>> Agent working in $worktree_path..." > "$log_file"
+
+        # Change to worktree and verify it works
+        if ! cd "$worktree_path"; then
+            echo "❌ Failed to cd to worktree: $worktree_path" >> "$log_file"
+            exit 1
+        fi
 
         # Self-healing loop with Review Agent
         local retries=0
@@ -716,6 +671,13 @@ $review_feedback
 Fix the issues identified in the review. Then commit: git commit -am 'Agent: $name - Fix attempt $retries'
 "
                 claude --dangerously-skip-permissions -p "$heal_prompt" >> "$log_file" 2>&1
+            fi
+
+            # Check for API Rate Limits (429)
+            if grep -q "429" "$log_file" || grep -i "rate limit" "$log_file"; then
+                 echo "⚠️ API Rate Limit (429) detected. Sleeping for 60s..." >> "$log_file"
+                 sleep 60
+                 # Retry without consuming a retry attempt if possible, or just accept it takes one slot
             fi
 
             # Check if agent committed
@@ -743,16 +705,14 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: $na
             fi
         done
 
-        # Save actual branch name for later merging
-        echo "$actual_branch_name" > "$LOG_DIR/${id}_branch.txt"
-
         if [[ $retries -ge $MAX_RETRIES ]]; then
             echo "❌ Task failed after $MAX_RETRIES attempts" >> "$log_file"
             exit 1
         fi
-
+        
     ) &
     PIDS+=($!)
+    TASK_BRANCHES+=("$branch_name")
 }
 
 # --- 📊 Dashboard ---
@@ -773,14 +733,11 @@ function monitor_progress() {
             break
         fi
         
-        # Get latest log activity with directory existence check
-        local latest_log=""
+        # Get latest log activity
+        local latest_log=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n 1)
         local activity=""
-        if [[ -d "$LOG_DIR" ]]; then
-            latest_log=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n 1)
-            if [[ -f "$latest_log" ]]; then
-                activity=$(tail -n 1 "$latest_log" | cut -c 1-50)
-            fi
+        if [[ -f "$latest_log" ]]; then
+            activity=$(tail -n 1 "$latest_log" | cut -c 1-50)
         fi
         
         printf "\r${BLUE}%s Active: %d/%d | Last: %s...${NC}   " "${spinners[spin_idx]}" "$running" "$MAX_PARALLEL_AGENTS" "$activity"
@@ -859,42 +816,23 @@ echo -e "${CYAN}📍 Session starting at commit: ${START_HASH:0:8}${NC}"
 run_librarian "$MODE"
 run_architect
 
-# Serial Worktree Creation, Parallel Execution
+# Parallel Execution with Worktrees
 declare -a PIDS
+declare -a TASK_BRANCHES
 TASK_COUNT=$(jq '. | length' "$PLAN_FILE")
 
 # Ensure worktree directory exists
 mkdir -p .vibe_worktrees
 
-# Step 1: Serial worktree creation
-echo -e "${BLUE}🏗️  Creating $TASK_COUNT worktrees (serial)...${NC}"
-declare -a WORKTREE_PATHS
-for ((i=0; i<TASK_COUNT; i++)); do
-    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
-    t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
-
-    echo -e "${CYAN}📂 Creating worktree for $t_name (Task ID: $t_id)${NC}"
-    worktree_path=$(create_task_worktree "$t_id")
-
-    if [[ -z "$worktree_path" ]]; then
-        echo -e "${RED}❌ Failed to create worktree for $t_id${NC}"
-        exit 1
-    fi
-
-    WORKTREE_PATHS+=("$worktree_path")
-done
-
-echo -e "${GREEN}✅ All worktrees created successfully${NC}"
-echo -e "${BLUE}⚡ Launching $TASK_COUNT tasks in parallel (Max Parallel: $MAX_PARALLEL_AGENTS)...${NC}"
+echo -e "${BLUE}⚡ Launching $TASK_COUNT tasks with worktrees (Max Parallel: $MAX_PARALLEL_AGENTS)...${NC}"
 
 # Launch tasks with parallelism control
 for ((i=0; i<TASK_COUNT; i++)); do
     t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
     t_name=$(jq -r ".[$i].name" "$PLAN_FILE")
     t_desc=$(jq -r ".[$i].desc" "$PLAN_FILE")
-    worktree_path="${WORKTREE_PATHS[$i]}"
-
-    run_agent_in_worktree "$t_id" "$t_name" "$t_desc" "$worktree_path"
+    
+    run_agent_pipeline "$t_id" "$t_name" "$t_desc"
     
     # Rate limiting: wait after every MAX_PARALLEL_AGENTS tasks
     if (( (i + 1) % MAX_PARALLEL_AGENTS == 0 )); then
@@ -910,27 +848,8 @@ if [[ ${#PIDS[@]} -gt 0 ]]; then
     monitor_progress "${PIDS[@]}"
 fi
 
-# Collect actual branch names from completed tasks
-declare -a TASK_BRANCHES
-for ((i=0; i<TASK_COUNT; i++)); do
-    t_id=$(jq -r ".[$i].id" "$PLAN_FILE")
-    branch_file="$LOG_DIR/${t_id}_branch.txt"
-
-    if [[ -f "$branch_file" ]]; then
-        actual_branch=$(cat "$branch_file")
-        TASK_BRANCHES+=("$actual_branch")
-        echo -e "${GREEN}✓ Found branch: $actual_branch${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Branch file not found for task $t_id${NC}"
-    fi
-done
-
 # Merge all task branches
-if [[ ${#TASK_BRANCHES[@]} -gt 0 ]]; then
-    merge_manager "${TASK_BRANCHES[@]}"
-else
-    echo -e "${YELLOW}⚠️  No task branches to merge${NC}"
-fi
+merge_manager "${TASK_BRANCHES[@]}"
 
 # Cleanup worktrees
 echo -e "${BLUE}🧹 Cleaning up worktrees...${NC}"
