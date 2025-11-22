@@ -17,7 +17,7 @@ let globalMonitor: ProgressMonitor | null = null;
 export type TaskProgress = {
     id: string;
     name: string;
-    status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+    status: 'PENDING' | 'RUNNING' | 'REVIEWING' | 'COMPLETED' | 'FAILED';
     startTime?: number;
     endTime?: number;
     latestActivity?: string;
@@ -59,7 +59,13 @@ export class ProgressMonitor {
      * Update task status
      */
     update(taskId: string, status: TaskProgress['status'], activity?: string): void {
-        const sessionId = status === 'RUNNING' ? `vibe-task-${taskId}` : undefined;
+        let sessionId: string | undefined;
+
+        if (status === 'RUNNING') {
+            sessionId = `vibe-task-${taskId}`;
+        } else if (status === 'REVIEWING') {
+            sessionId = `vibe-task-review-${taskId}`;
+        }
 
         // 转换状态到TableTUI格式
         let tableStatus: 'waiting' | 'running' | 'completed' | 'failed' | 'reviewing';
@@ -70,8 +76,11 @@ export class ProgressMonitor {
             case 'RUNNING':
                 tableStatus = 'running';
                 break;
-            case 'COMPLETED':
+            case 'REVIEWING':
                 tableStatus = 'reviewing';
+                break;
+            case 'COMPLETED':
+                tableStatus = 'completed';
                 break;
             case 'FAILED':
                 tableStatus = 'failed';

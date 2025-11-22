@@ -67,7 +67,7 @@ export async function runTasksInBatches(
             limit(async () => {
                 try {
                     monitor.update(task.id, 'RUNNING');
-                    await runSingleTaskWithWorktree(task, session, config);
+                    await runSingleTaskWithWorktree(task, session, config, monitor);
                     monitor.update(task.id, 'COMPLETED');
                 } catch {
                     monitor.update(task.id, 'FAILED');
@@ -92,7 +92,8 @@ export async function runTasksInBatches(
 async function runSingleTaskWithWorktree(
     task: TaskState,
     session: SessionState,
-    config: VibeConfig
+    config: VibeConfig,
+    monitor: any // Pass monitor instance
 ): Promise<void> {
     log.cyan(`🚀 [Agent] ${task.name} (Branch: ${task.branchName})`);
 
@@ -164,6 +165,7 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                 }
 
                 // Run Review Agent
+                monitor.update(task.id, 'REVIEWING');
                 const reviewPassed = await runReviewAgent(task, session, config);
                 if (!reviewPassed) {
                     // Extract review feedback
@@ -183,11 +185,7 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                 task.endTime = Date.now(); // Track end time
 
                 // 🎯 更新TUI显示任务完全完成
-                if (config.logDir) {
-                    const { ProgressMonitor } = await import('../utils/progressMonitor.js');
-                    const monitor = new ProgressMonitor(config.logDir);
-                    monitor.completeTask(task.id);
-                }
+                monitor.update(task.id, 'COMPLETED');
 
                 return;
             },
