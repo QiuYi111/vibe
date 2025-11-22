@@ -253,7 +253,7 @@ export class TmuxTaskRunner {
      */
     private static async waitForSentinel(doneSignalFile: string, sessionId: string, timeout: number): Promise<void> {
         const startTime = Date.now();
-        const REMINDER_INTERVAL = 5 * 60 * 1000; // 5 minutes
+        const REMINDER_INTERVAL = 2 * 60 * 1000; // 2 minutes
         let lastReminderTime = startTime;
 
         return new Promise((resolve, reject) => {
