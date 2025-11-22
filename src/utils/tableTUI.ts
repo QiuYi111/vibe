@@ -302,12 +302,6 @@ export class TableTUI {
                 const sessionId = `vibe-task-${taskId}`;
                 const isSessionActive = activeSessions.includes(sessionId);
 
-                // 如果内部状态显示running但tmux会话不存在，标记为失败
-                if (row.status === 'running' && !isSessionActive) {
-                    row.status = 'failed';
-                    row.progress = '❌ Session terminated unexpectedly';
-                }
-
                 // 如果内部状态显示waiting但tmux会话存在，更新状态
                 if (row.status === 'waiting' && isSessionActive && !row.sessionId) {
                     row.sessionId = sessionId;

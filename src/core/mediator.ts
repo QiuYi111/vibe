@@ -5,7 +5,8 @@
  * with "good taste" and simplicity principles
  */
 
-import { runClaude, runGit } from '../utils/childProcess.js';
+import { runGit } from '../utils/childProcess.js';
+import { TmuxTaskRunner } from './tmuxTaskRunner.js';
 import { log } from '../logger.js';
 import * as path from 'path';
 
@@ -72,50 +73,66 @@ Files: ${conflictFiles}
 ${conflictDiff}
 
 [TASK]
-Resolve the conflicts by:
-1. Understanding the intent of both code paths
-2. Applying good taste - choose the simpler, more elegant solution
-3. If both are flawed, write a better third solution
-4. Use your native file editing tools to resolve conflicts in each file
-5. Stage the resolved files with: git add <files>
-6. DO NOT commit yet - just resolve and stage
+1. Resolve the conflicts in the files.
+2. Use your native file editing tools.
+3. Stage the resolved files: git add <files>
+4. Verify that no conflict markers remain.
 
-Be decisive. This is your codebase now.
+[OUTPUT REQUIREMENT]
+When finished, write a JSON object to the output file:
+{
+  "status": "RESOLVED" | "FAILED",
+  "message": "Brief summary of resolution"
+}
 `;
 
+    console.log(``);
+    log.cyan(`🎬 [Tmux] Mediator started for ${conflictedBranch}`);
+    log.success(`📺 To watch: tmux attach -t vibe-task-mediator-${conflictedBranch}`);
+    console.log(``);
+
     try {
-        // Run Claude to resolve conflicts
-        const result = await runClaude(mediationPrompt);
+        const resultJson = await TmuxTaskRunner.runClaudeInTmux({
+            taskId: `mediator-${conflictedBranch}`,
+            prompt: mediationPrompt,
+            cwd: process.cwd(), // Mediator runs in root
+            needsOutput: true,
+            outputFormat: 'json',
+            timeout: 0
+        });
 
-        // Log the mediation session
-        log.file(mediatorLog, `=== Mediator Session for ${conflictedBranch} ===\n`);
-        log.file(mediatorLog, `Conflict Files:\n${conflictFiles}\n`);
-        log.file(mediatorLog, `\nClaude Output:\n${result.stdout}\n`);
-        if (result.stderr) {
-            log.file(mediatorLog, `\nStderr:\n${result.stderr}\n`);
-        }
-
-        // Check if conflicts are resolved
-        if (await hasUnresolvedConflicts()) {
-            log.error('❌ Mediator failed to resolve all conflicts');
-            log.file(mediatorLog, '\n❌ FAILED: Unresolved conflicts remain');
+        if (!resultJson) {
+            log.error('❌ Mediator returned no output');
             return false;
         }
 
-        // Complete the merge
-        const commitResult = await runGit(['commit', '--no-edit']);
-        if (commitResult.code !== 0) {
-            log.error('❌ Failed to commit resolved conflicts');
+        const result = JSON.parse(resultJson);
+        log.file(mediatorLog, JSON.stringify(result, null, 2));
+
+        if (result.status === 'RESOLVED') {
+            // Check if conflicts are actually resolved
+            if (await hasUnresolvedConflicts()) {
+                log.error('❌ Mediator claimed success but conflicts remain');
+                return false;
+            }
+
+            // Complete the merge
+            const commitResult = await runGit(['commit', '--no-edit']);
+            if (commitResult.code !== 0) {
+                log.error('❌ Failed to commit resolved conflicts');
+                return false;
+            }
+
+            log.success('✅ Conflicts resolved by AI Mediator');
+            return true;
+        } else {
+            log.error(`❌ Mediator failed: ${result.message}`);
             return false;
         }
 
-        log.success('✅ Conflicts resolved by AI Mediator');
-        log.file(mediatorLog, '\n✅ SUCCESS: Conflicts resolved and committed');
-        return true;
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Mediator error: ${errorMsg}`);
-        log.file(mediatorLog, `\n❌ ERROR: ${errorMsg}`);
         return false;
     }
 }

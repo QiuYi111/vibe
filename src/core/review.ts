@@ -3,8 +3,9 @@
  */
 
 import { TaskState, SessionState, VibeConfig } from '../types.js';
-import { runClaude, execCmd } from '../utils/childProcess.js';
-import { fileExists, writeFile } from '../utils/file.js';
+import { execCmd } from '../utils/childProcess.js';
+import { TmuxTaskRunner } from './tmuxTaskRunner.js';
+import { fileExists } from '../utils/file.js';
 import { log } from '../logger.js';
 import * as path from 'path';
 
@@ -15,18 +16,17 @@ export async function runReviewAgent(task: TaskState, session: SessionState, con
     log.info(`🔍 [Review Agent] Analyzing task: ${task.name}`);
 
     const reviewLog = path.join(config.logDir, `review_${task.id}.log`);
-    const reviewReport = path.join(config.logDir, `review_report_${task.id}.md`);
-    const testCmdFile = path.join(config.logDir, `test_cmd_${task.id}.txt`);
 
-    // Get changes in worktree (using git diff)
+    // Get changes in worktree
     const diffResult = await execCmd('git', ['diff', 'HEAD~1', '--stat'], { cwd: task.worktreePath });
     const changes = diffResult.code === 0 ? diffResult.stdout : 'No commits yet';
 
     const diffContentResult = await execCmd('git', ['diff', 'HEAD~1'], { cwd: task.worktreePath });
     const diffContent = diffContentResult.code === 0 ? diffContentResult.stdout : 'No diff available';
 
-    // User feedback: Use /sc:analyze instead of /sc:review
-    // Enhanced prompt with dynamic test command requirement
+    // Determine default test command
+    const defaultTestCmd = getDefaultTestCommand(session.domain, task.worktreePath);
+
     const reviewPrompt = `/sc:analyze
 
 [TASK REVIEW]
@@ -40,67 +40,57 @@ ${changes}
 Code Diff:
 ${diffContent}
 
-[CRITICAL REQUIREMENT]
-After your analysis, you MUST provide a test command on a new line starting with:
-TEST_COMMAND: <your command here>
+[INSTRUCTIONS]
+1. Analyze the code changes for correctness, security, and style.
+2. **EXECUTE TESTS**: Run the appropriate test command for this project (e.g., ${defaultTestCmd}).
+   - If no tests exist, create a simple verification script and run it.
+   - Ensure the tests pass.
+3. If tests fail, try to fix the code and re-run tests (you have full shell access).
+4. If you cannot fix it, report failure.
 
-The test command should:
-1. Have HIGH COVERAGE (test all changed functionality)
-2. Be RIGOROUS (catch edge cases and errors)
-3. Be EXECUTABLE in the worktree directory
-4. Include verbose flags for detailed output
-
-Examples:
-- TEST_COMMAND: npm test -- --coverage --verbose
-- TEST_COMMAND: pytest tests/ -v --cov=src --cov-report=term
-- TEST_COMMAND: cargo test --all-features -- --test-threads=1
-- TEST_COMMAND: go test -v -cover ./...
-
-If no tests are appropriate: TEST_COMMAND: echo "No tests required"
+[OUTPUT REQUIREMENT]
+When finished, write a JSON object to the output file with this structure:
+{
+  "status": "PASS" | "FAIL",
+  "message": "Brief summary of review and test results",
+  "testCommand": "The command you ran"
+}
 `;
 
-    // Run Claude in worktree
-    const claudeResult = await runClaude(reviewPrompt, { cwd: task.worktreePath });
+    console.log(``);
+    log.cyan(`🎬 [Tmux] Review Agent started for ${task.name}`);
+    log.success(`📺 To watch: tmux attach -t vibe-task-review-${task.id}`);
+    console.log(``);
 
-    if (claudeResult.code !== 0) {
-        log.file(reviewLog, `Claude failed: ${claudeResult.stderr}`);
-        return false;
-    }
+    try {
+        const resultJson = await TmuxTaskRunner.runClaudeInTmux({
+            taskId: `review-${task.id}`,
+            prompt: reviewPrompt,
+            cwd: task.worktreePath,
+            needsOutput: true,
+            outputFormat: 'json',
+            timeout: 0 // No timeout, let user intervene if needed
+        });
 
-    // Write review report
-    writeFile(reviewReport, claudeResult.stdout);
-    log.file(reviewLog, `Review report generated: ${reviewReport}`);
+        if (!resultJson) {
+            log.error('❌ Review Agent returned no output');
+            return false;
+        }
 
-    // Extract test command dynamically from review output (bash approach)
-    const testCmdMatch = claudeResult.stdout.match(/TEST_COMMAND:\s*(.+)/);
-    let testCmd: string;
+        const result = JSON.parse(resultJson);
+        log.file(reviewLog, JSON.stringify(result, null, 2));
 
-    if (testCmdMatch) {
-        testCmd = testCmdMatch[1].trim();
-        log.file(reviewLog, `✅ Extracted dynamic test command: ${testCmd}`);
-    } else {
-        // Fallback to domain-based defaults
-        log.file(reviewLog, '⚠️  No TEST_COMMAND found in review output, using domain default');
-        testCmd = getDefaultTestCommand(session.domain, task.worktreePath);
-    }
+        if (result.status === 'PASS') {
+            log.success(`✅ Review passed: ${result.message}`);
+            return true;
+        } else {
+            log.error(`❌ Review failed: ${result.message}`);
+            return false;
+        }
 
-    writeFile(testCmdFile, testCmd);
-    log.file(reviewLog, `>>> Running test: ${testCmd}`);
-
-    // Run the test command in worktree
-    const testResult = await execCmd('sh', ['-c', testCmd], { cwd: task.worktreePath });
-    log.file(reviewLog, testResult.stdout);
-    log.file(reviewLog, testResult.stderr);
-
-    // Determine review success based on analysis output and test results
-    const reviewPassed =
-        !claudeResult.stdout.toLowerCase().includes('failed') && !claudeResult.stdout.toLowerCase().includes('critical error');
-
-    if (reviewPassed && testResult.code === 0) {
-        log.file(reviewLog, '✅ Review passed and tests successful');
-        return true;
-    } else {
-        log.file(reviewLog, '❌ Review failed or tests failed');
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log.error(`Review Agent failed: ${errorMsg}`);
         return false;
     }
 }

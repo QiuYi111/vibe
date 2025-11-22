@@ -261,6 +261,7 @@ export class TmuxTaskRunner {
                     clearInterval(checkInterval);
                     // If session died but file exists, that's fine. If not, it's an error.
                     if (fs.existsSync(doneSignalFile)) {
+                        console.log(`✨ Sentinel file detected (session ended early): ${path.basename(doneSignalFile)}`);
                         resolve();
                     } else {
                         reject(new Error('Tmux session ended unexpectedly without signal'));
@@ -271,6 +272,7 @@ export class TmuxTaskRunner {
                 // Check for sentinel file
                 if (fs.existsSync(doneSignalFile)) {
                     clearInterval(checkInterval);
+                    console.log(`✨ Sentinel file detected: ${path.basename(doneSignalFile)}`);
                     resolve();
                     return;
                 }
@@ -289,6 +291,7 @@ export class TmuxTaskRunner {
      */
     private static async gracefulExit(sessionId: string): Promise<void> {
         try {
+            console.log(`👋 Sending /exit to session ${sessionId}...`);
             execSync(`tmux send-keys -t ${sessionId} /exit Enter`);
             // Give it a moment to exit
             await new Promise(r => setTimeout(r, 1500));
