@@ -93,7 +93,7 @@ async function runSingleTaskWithWorktree(
     task: TaskState,
     session: SessionState,
     config: VibeConfig,
-    monitor: any // Pass monitor instance
+    monitor: { update: (taskId: string, status: 'PENDING' | 'RUNNING' | 'REVIEWING' | 'COMPLETED' | 'FAILED', activity?: string) => void }
 ): Promise<void> {
     log.cyan(`🚀 [Agent] ${task.name} (Branch: ${task.branchName})`);
 
