@@ -20,6 +20,8 @@ export class TableTUI {
     private updateInterval: NodeJS.Timeout | null = null;
     private mergeStatus: 'waiting' | 'merging' | 'completed' = 'waiting';
     private reviewStatus: 'waiting' | 'reviewing' | 'completed' = 'waiting';
+    private spinnerFrame: number = 0;
+    private readonly spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
     constructor(_taskIds: string[], _taskNames: string[]) {
         // 初始化表格行
@@ -39,8 +41,11 @@ export class TableTUI {
     start(): void {
         this.render();
 
-        // 每2秒更新一次显示
-        this.updateInterval = setInterval(() => {
+        // 每2秒更新一次显示，包括状态同步
+        this.updateInterval = setInterval(async () => {
+            this.spinnerFrame = (this.spinnerFrame + 1) % this.spinnerChars.length;
+            await this.syncWithTmux();
+            this.updateRunningTaskProgress();
             this.render();
         }, 2000);
     }
@@ -85,6 +90,8 @@ export class TableTUI {
             row.progress = progress;
         }
 
+        // 推进spinner帧数让动画更流畅
+        this.spinnerFrame = (this.spinnerFrame + 1) % this.spinnerChars.length;
         this.render();
     }
 
@@ -104,9 +111,12 @@ export class TableTUI {
      * 获取状态图标
      */
     private getStatusIcon(status: string): string {
+        if (status === 'running') {
+            return this.spinnerChars[this.spinnerFrame];
+        }
+
         const icons = {
             'waiting': '⏳',
-            'running': '⠙',
             'completed': '✅',
             'failed': '❌',
             'reviewing': '🔍'
@@ -271,5 +281,51 @@ export class TableTUI {
                 console.log('👨‍💼 CTO review completed');
             }
         }
+    }
+
+    /**
+     * 与tmux同步状态
+     */
+    private async syncWithTmux(): Promise<void> {
+        try {
+            const { execSync } = await import('child_process');
+
+            // 获取所有活跃的tmux会话
+            const output = execSync('tmux ls -F "#{session_name}"', { encoding: 'utf-8' });
+            const activeSessions = output
+                .split('\n')
+                .filter(name => name.startsWith('vibe-task-'))
+                .map(name => name.trim());
+
+            // 同步内部状态
+            this.rows.forEach((row, taskId) => {
+                const sessionId = `vibe-task-${taskId}`;
+                const isSessionActive = activeSessions.includes(sessionId);
+
+                // 如果内部状态显示running但tmux会话不存在，标记为失败
+                if (row.status === 'running' && !isSessionActive) {
+                    row.status = 'failed';
+                    row.progress = '❌ Session terminated unexpectedly';
+                }
+
+                // 如果内部状态显示waiting但tmux会话存在，更新状态
+                if (row.status === 'waiting' && isSessionActive && !row.sessionId) {
+                    row.sessionId = sessionId;
+                    row.status = 'running';
+                    row.startTime = Date.now();
+                }
+            });
+        } catch {
+            // tmux命令失败，忽略同步错误
+            // 这可能是tmux不可用或权限问题
+        }
+    }
+
+    /**
+     * 静态清理方法
+     */
+    static cleanup(): void {
+        // 在这里可以添加任何需要清理的资源
+        console.log('🧹 TableTUI cleanup completed');
     }
 }

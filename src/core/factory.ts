@@ -8,6 +8,7 @@ import { runReviewAgent } from './review.js';
 import { TmuxTaskRunner } from './tmuxTaskRunner.js';
 import { log } from '../logger.js';
 import { fileExists, readFile } from '../utils/file.js';
+import { registerShutdownHandlers } from '../utils/cleanup.js';
 import * as path from 'path';
 
 /**
@@ -18,6 +19,8 @@ export async function runTasksInBatches(
     session: SessionState,
     config: VibeConfig
 ): Promise<void> {
+    // 注册清理钩子（只注册一次）
+    registerShutdownHandlers();
     // Initialize task states
     const tasks: TaskState[] = taskPlan.map((item) => ({
         id: item.id,
@@ -142,6 +145,7 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                 log.info(`📋 Or use: node dist/cli/tmux-cli.js attach ${task.id}`);
                 console.log(``);
 
+                // TmuxTaskRunner内部已包含健壮性检查
                 await TmuxTaskRunner.runClaudeInTmux({
                     taskId: task.id,
                     prompt: prompt,
@@ -181,8 +185,7 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                 // 🎯 更新TUI显示任务完全完成
                 if (config.logDir) {
                     const { ProgressMonitor } = await import('../utils/progressMonitor.js');
-                    // 创建临时monitor实例来调用completeTask
-                    const monitor = new (ProgressMonitor as any)(config.logDir);
+                    const monitor = new ProgressMonitor(config.logDir);
                     monitor.completeTask(task.id);
                 }
 

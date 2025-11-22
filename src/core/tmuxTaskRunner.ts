@@ -23,12 +23,11 @@ export interface TmuxTaskOptions {
 
 export class TmuxTaskRunner {
     private static readonly SESSION_PREFIX = 'vibe-task';
-    private static readonly POLL_INTERVAL = 2000; // 2秒检查一次
-    private static readonly STARTUP_DELAY = 500; // 等待tmux启动
-    private static readonly MAX_SESSIONS = 10; // 最大并发会话数
+    private static readonly POLL_INTERVAL = 2000; // 2 seconds
+    private static readonly MAX_SESSIONS = 10;
 
     /**
-     * 检查tmux是否可用（带错误提示）
+     * Check if tmux is available
      */
     static async checkTmuxAvailability(): Promise<void> {
         try {
@@ -39,7 +38,7 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 检查会话数量限制
+     * Check session limits
      */
     static async checkSessionLimits(): Promise<void> {
         const activeSessions = this.getActiveSessions();
@@ -49,150 +48,154 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 清理旧的会话
+     * Clean up old sessions
      */
     static async cleanupOldSessions(): Promise<void> {
         const sessions = this.getActiveSessions();
 
-        // 如果会话数量未达到限制，无需清理
         if (sessions.length <= this.MAX_SESSIONS * 0.8) {
             return;
         }
 
-        // 获取会话创建时间并清理最老的会话
         for (const sessionId of sessions) {
             try {
-                // 检查会话是否真的存在
                 execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
-
-                // 获取会话创建时间（通过tmux session的created时间）
                 const creationTime = execSync(`tmux display-message -p -t ${sessionId} '#{session_created}'`, {
                     encoding: 'utf-8'
                 }).trim();
 
                 const sessionAge = Date.now() - parseInt(creationTime) * 1000;
 
-                // 清理超过1小时的僵尸会话
-                if (sessionAge > 3600000) { // 1小时
+                if (sessionAge > 3600000) { // 1 hour
                     console.log(`🧹 Cleaning up old session: ${sessionId}`);
                     execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
                 }
             } catch {
-                // 会话已不存在，从列表中移除
                 continue;
             }
         }
     }
 
     /**
-     * 在tmux会话中运行Claude任务
+     * Run Claude in a tmux session
      */
     static async runClaudeInTmux(options: TmuxTaskOptions): Promise<string | null> {
         const { taskId, prompt, cwd, needsOutput = false, outputFormat = 'text', timeout = 0 } = options;
 
-        // 健壮性检查
         await this.checkTmuxAvailability();
         await this.checkSessionLimits();
         await this.cleanupOldSessions();
 
         const sessionId = `${this.SESSION_PREFIX}-${taskId}`;
-        const promptFile = path.join(cwd, `.vibe_prompt_${taskId}.txt`);
+        const doneSignalFile = path.join(cwd, `.vibe_done_${taskId}`);
         const outputFile = path.join(cwd, `.vibe_output_${taskId}.${outputFormat}`);
 
+        // Clean up previous signals
+        if (fs.existsSync(doneSignalFile)) fs.unlinkSync(doneSignalFile);
+        if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
+
         try {
-            // 1. 准备Prompt文件
-            await this.preparePromptFile(prompt, promptFile, needsOutput, outputFile, outputFormat);
+            // 1. Prepare prompt with sentinel instruction
+            const finalPrompt = this.preparePrompt(prompt, doneSignalFile, needsOutput, outputFile, outputFormat);
 
-            // 2. 启动tmux会话
-            await this.startTmuxSession(sessionId, cwd, promptFile);
+            // 2. Start tmux session with interactive Claude
+            await this.startTmuxSession(sessionId, cwd);
 
-            // 3. 显示介入指南
+            // 3. Wait for GUI/TUI to load
+            await new Promise(r => setTimeout(r, 3000));
+
+            // 4. Bypass warning (Down + Enter)
+            await this.bypassWarning(sessionId);
+
+            // 5. Inject prompt
+            await this.injectPrompt(sessionId, finalPrompt);
+
+            // 6. Show intervention guide
             this.showInterventionGuide(sessionId, taskId);
 
-            // 4. 等待任务完成 (timeout=0表示无限等待)
-            await this.waitForSessionCompletion(sessionId, timeout);
+            // 7. Wait for sentinel file
+            await this.waitForSentinel(doneSignalFile, sessionId, timeout);
 
-            // 5. 读取结果
+            // 8. Graceful exit
+            await this.gracefulExit(sessionId);
+
+            // 9. Read result
             if (needsOutput && fs.existsSync(outputFile)) {
                 const result = fs.readFileSync(outputFile, 'utf-8').trim();
-                this.cleanupFiles(promptFile, outputFile);
+                this.cleanupFiles(doneSignalFile, outputFile);
                 return result;
             }
 
-            this.cleanupFiles(promptFile, outputFile);
+            this.cleanupFiles(doneSignalFile, outputFile);
             return null;
 
         } catch (error) {
-            this.cleanupFiles(promptFile, outputFile);
-            this.killSession(sessionId); // 出错时清理session
+            // Don't kill session immediately on error to allow debugging, 
+            // but maybe we should if it's a timeout? 
+            // For now, let's keep the session alive for manual inspection if it failed.
+            // But if it's a critical error in setup, we might want to clean up.
+            // Let's stick to the original behavior of cleaning up files but maybe keeping session?
+            // Actually, if we throw, the caller might want to retry.
+            // Let's kill session on error to be safe and avoid zombie sessions accumulating.
+            this.killSession(sessionId);
+            this.cleanupFiles(doneSignalFile, outputFile);
             throw error;
         }
     }
 
     /**
-     * 准备Prompt文件，添加输出指令
+     * Prepare the prompt string with instructions
      */
-    private static async preparePromptFile(
+    private static preparePrompt(
         originalPrompt: string,
-        promptFile: string,
+        doneSignalFile: string,
         needsOutput: boolean,
         outputFile: string,
         outputFormat: string
-    ): Promise<void> {
+    ): string {
         let finalPrompt = originalPrompt;
+
+        finalPrompt += `\n\n[SYSTEM INSTRUCTION]\n`;
 
         if (needsOutput) {
             const outputInstruction = outputFormat === 'json'
-                ? `\n\nCRITICAL: Write your response as a JSON object to file "${path.basename(outputFile)}". Do not output to stdout.`
-                : `\n\nCRITICAL: Write your response to file "${path.basename(outputFile)}". Do not output to stdout.`;
-
+                ? `1. Write your response as a JSON object to file "${path.basename(outputFile)}". Do not output to stdout.\n`
+                : `1. Write your response to file "${path.basename(outputFile)}". Do not output to stdout.\n`;
             finalPrompt += outputInstruction;
         }
 
-        fs.writeFileSync(promptFile, finalPrompt, 'utf-8');
+        finalPrompt += `2. WHEN DONE, create an empty file named "${path.basename(doneSignalFile)}"\n`;
+
+        return finalPrompt;
     }
 
     /**
-     * 启动tmux会话
+     * Start tmux session with interactive Claude
      */
-    private static async startTmuxSession(sessionId: string, cwd: string, promptFile: string): Promise<void> {
-        // 清理已存在的session
+    private static async startTmuxSession(sessionId: string, cwd: string): Promise<void> {
+        // Kill existing session
         try {
             execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
-        } catch {
-            // Session不存在，忽略
-        }
+        } catch { }
 
-        // 构造tmux内部命令
-        const innerCmd = [
-            `cd "${cwd}"`,
-            `echo "🚀 Vibe Task Started in Tmux Session: ${sessionId}"`,
-            `echo "📁 Working Directory: $(pwd)"`,
-            `echo "🤖 Starting Claude..."`,
-            `echo ""`,
-            `claude --dangerously-skip-permissions "$(cat '${promptFile}')"`, // 关键：添加权限跳过标志
-            `exit_code=$?`,
-            `echo ""`,
-            `if [ $exit_code -eq 0 ]; then echo "✅ Task completed successfully"; exit 0; else echo "❌ Task failed with exit code $exit_code"; read -p "Press Enter to exit..." || true; exit 1; fi`
-        ].join(' && ');
+        // Start session with bash and claude
+        // We use 'read' to keep the window open if claude crashes or exits unexpectedly
+        const cmd = `cd "${cwd}" && claude --dangerously-skip-permissions; read`;
 
-        // 启动detached tmux session
-        const tmux = spawn('tmux', ['new-session', '-d', '-s', sessionId, 'bash', '-c', innerCmd]);
+        const tmux = spawn('tmux', ['new-session', '-d', '-s', sessionId, 'bash', '-c', cmd]);
 
         return new Promise((resolve, reject) => {
             tmux.on('error', reject);
             tmux.on('close', (code) => {
                 if (code === 0) {
-                    // 等待一小段时间让tmux完全启动
                     setTimeout(() => {
-                        // 验证tmux会话是否真的创建成功
                         try {
                             execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
                             resolve();
                         } catch {
                             reject(new Error(`Tmux session ${sessionId} was not created successfully`));
                         }
-                    }, this.STARTUP_DELAY);
+                    }, 500);
                 } else {
                     reject(new Error(`Failed to start tmux session: ${code}`));
                 }
@@ -201,44 +204,103 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 显示介入指南 (内部使用，详细信息在factory中显示)
+     * Bypass the warning screen
      */
-    private static showInterventionGuide(sessionId: string, taskId: string): void {
-        // 简化为内部日志，详细信息在factory.ts中显示给用户
-        console.log(`📺 Tmux session ${sessionId} created for task ${taskId}`);
+    private static async bypassWarning(sessionId: string): Promise<void> {
+        try {
+            // Down + Enter to select "Yes" and confirm
+            execSync(`tmux send-keys -t ${sessionId} Down Enter`);
+            // Wait a bit for the main input interface to load
+            await new Promise(r => setTimeout(r, 1000));
+        } catch (e) {
+            console.error(`Failed to bypass warning for session ${sessionId}`, e);
+        }
     }
 
     /**
-     * 轮询等待session完成
+     * Inject prompt via tmux buffer
      */
-    private static async waitForSessionCompletion(sessionId: string, timeout: number): Promise<void> {
+    private static async injectPrompt(sessionId: string, prompt: string): Promise<void> {
+        try {
+            // Load prompt into buffer
+            const loadBuffer = spawn('tmux', ['load-buffer', '-']);
+            loadBuffer.stdin.write(prompt);
+            loadBuffer.stdin.end();
+
+            await new Promise((resolve, reject) => {
+                loadBuffer.on('close', (code) => code === 0 ? resolve(null) : reject(new Error('load-buffer failed')));
+                loadBuffer.on('error', reject);
+            });
+
+            // Paste buffer and send Enter
+            execSync(`tmux paste-buffer -t ${sessionId}`);
+            execSync(`tmux send-keys -t ${sessionId} Enter`);
+
+        } catch (e) {
+            throw new Error(`Failed to inject prompt: ${e}`);
+        }
+    }
+
+    /**
+     * Wait for sentinel file to appear
+     */
+    private static async waitForSentinel(doneSignalFile: string, sessionId: string, timeout: number): Promise<void> {
         const startTime = Date.now();
 
         return new Promise((resolve, reject) => {
             const checkInterval = setInterval(() => {
+                // Check if session is still alive
                 try {
-                    // has-session返回0表示存在，非0表示不存在（已结束）
                     execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
-
-                    // 检查超时 (timeout=0表示无超时限制)
-                    if (timeout > 0 && Date.now() - startTime > timeout) {
-                        clearInterval(checkInterval);
-                        reject(new Error(`Tmux session timeout after ${timeout/1000}s`));
-                        return;
-                    }
-
-                    // Session仍在运行，继续等待
                 } catch {
-                    // Session不存在了，任务完成
+                    clearInterval(checkInterval);
+                    // If session died but file exists, that's fine. If not, it's an error.
+                    if (fs.existsSync(doneSignalFile)) {
+                        resolve();
+                    } else {
+                        reject(new Error('Tmux session ended unexpectedly without signal'));
+                    }
+                    return;
+                }
+
+                // Check for sentinel file
+                if (fs.existsSync(doneSignalFile)) {
                     clearInterval(checkInterval);
                     resolve();
+                    return;
+                }
+
+                // Check timeout
+                if (timeout > 0 && Date.now() - startTime > timeout) {
+                    clearInterval(checkInterval);
+                    reject(new Error(`Task timeout after ${timeout / 1000}s`));
                 }
             }, this.POLL_INTERVAL);
         });
     }
 
     /**
-     * 清理临时文件
+     * Gracefully exit the session
+     */
+    private static async gracefulExit(sessionId: string): Promise<void> {
+        try {
+            execSync(`tmux send-keys -t ${sessionId} /exit Enter`);
+            // Give it a moment to exit
+            await new Promise(r => setTimeout(r, 1500));
+            // Force kill if it's still there (optional, but keeps things clean)
+            execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
+        } catch { }
+    }
+
+    /**
+     * Show intervention guide
+     */
+    private static showInterventionGuide(sessionId: string, taskId: string): void {
+        console.log(`📺 Tmux session ${sessionId} running for task ${taskId}`);
+    }
+
+    /**
+     * Clean up files
      */
     private static cleanupFiles(...files: string[]): void {
         files.forEach(file => {
@@ -246,25 +308,21 @@ export class TmuxTaskRunner {
                 if (fs.existsSync(file)) {
                     fs.unlinkSync(file);
                 }
-            } catch {
-                // 忽略清理错误
-            }
+            } catch { }
         });
     }
 
     /**
-     * 强制杀死session
+     * Kill session
      */
     private static killSession(sessionId: string): void {
         try {
             execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
-        } catch {
-            // 忽略错误
-        }
+        } catch { }
     }
 
     /**
-     * 获取所有活跃的vibe session
+     * Get active sessions
      */
     static getActiveSessions(): string[] {
         try {
@@ -279,7 +337,7 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 显示所有活跃session的状态
+     * Show session status
      */
     static showSessionStatus(): void {
         const sessions = this.getActiveSessions();
@@ -309,31 +367,20 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 强制清理所有vibe session
+     * Cleanup all sessions
      */
     static async cleanup(): Promise<void> {
         try {
-            // 首先检查tmux是否可用
             await this.checkTmuxAvailability();
-
             const sessions = this.getActiveSessions();
-            if (sessions.length === 0) {
-                console.log('📭 No active Vibe sessions to clean');
-                return;
-            }
+            if (sessions.length === 0) return;
 
             for (const sessionId of sessions) {
                 try {
                     execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
                     console.log(`🧹 Cleaned up session: ${sessionId}`);
-                } catch {
-                    // 忽略单个会话清理错误
-                    console.log(`⚠️ Session ${sessionId} already ended or not found`);
-                }
+                } catch { }
             }
-        } catch {
-            // tmux不可用，无需清理
-            console.log('📭 Tmux not available, no sessions to clean');
-        }
+        } catch { }
     }
 }

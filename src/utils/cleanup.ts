@@ -9,6 +9,8 @@ import { runGit } from './childProcess.js';
 import { log } from '../logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { TmuxTaskRunner } from '../core/tmuxTaskRunner.js';
+import { TableTUI } from './tableTUI.js';
 
 const WORKTREE_BASE_DIR = '.vibe_worktrees';
 
@@ -45,9 +47,47 @@ export async function cleanupAllWorktrees(): Promise<void> {
             }
         }
 
-        log.success('✅ Cleanup complete');
+        log.success('✅ Worktree cleanup complete');
     } catch (error) {
-        log.error(`Error during cleanup: ${error instanceof Error ? error.message : String(error)}`);
+        log.error(`Error during worktree cleanup: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+/**
+ * Cleanup Tmux sessions and TableTUI
+ *
+ * This function ensures no orphan tmux sessions remain and UI resources are freed
+ */
+export async function cleanupTmuxResources(): Promise<void> {
+    try {
+        log.warn('🧹 Cleaning up Tmux resources...');
+
+        // 清理Tmux会话（内部已处理错误情况）
+        await TmuxTaskRunner.cleanup();
+
+        // 清理TableTUI资源
+        TableTUI.cleanup();
+
+        log.success('✅ Tmux resource cleanup complete');
+    } catch (error) {
+        log.error(`Error during Tmux cleanup: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+/**
+ * Comprehensive cleanup of all resources
+ */
+export async function cleanupAllResources(): Promise<void> {
+    const cleanupTasks: Promise<void>[] = [
+        cleanupAllWorktrees(),
+        cleanupTmuxResources()
+    ];
+
+    try {
+        await Promise.allSettled(cleanupTasks);
+        log.success('🧹 All resource cleanup completed');
+    } catch (error) {
+        log.error(`Error during comprehensive cleanup: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -69,7 +109,7 @@ export function registerShutdownHandlers(): void {
         log.warn(`🛑 Received ${signal}, cleaning up...`);
 
         try {
-            await cleanupAllWorktrees();
+            await cleanupAllResources();
         } catch (error) {
             log.error(`Cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
         }

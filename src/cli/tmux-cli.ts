@@ -18,7 +18,7 @@ async function main() {
                 break;
 
             case 'attach':
-            case 'at':
+            case 'at': {
                 if (args.length < 2) {
                     console.error('Usage: vibe-tmux attach <session-id|task-id>');
                     process.exit(1);
@@ -33,8 +33,9 @@ async function main() {
                 const { spawn } = await import('child_process');
                 spawn('tmux', ['attach', '-t', sessionId], { stdio: 'inherit' });
                 break;
+            }
 
-            case 'kill':
+            case 'kill': {
                 if (args.length < 2) {
                     console.error('Usage: vibe-tmux kill <session-id|task-id>');
                     process.exit(1);
@@ -47,19 +48,23 @@ async function main() {
                 execSync(`tmux kill-session -t ${killSessionId}`, { stdio: 'inherit' });
                 console.log(`Session ${killSessionId} killed`);
                 break;
+            }
 
-            case 'check':
-                const isAvailable = await TmuxTaskRunner.isTmuxAvailable();
-                console.log(`Tmux availability: ${isAvailable ? '✅ Available' : '❌ Not found'}`);
+            case 'check': {
+                try {
+                    await TmuxTaskRunner.checkTmuxAvailability();
+                    console.log('Tmux availability: ✅ Available');
+                } catch {
+                    console.log('Tmux availability: ❌ Not found');
+                }
 
-                if (isAvailable) {
-                    const activeSessions = TmuxTaskRunner.getActiveSessions();
-                    console.log(`Active Vibe sessions: ${activeSessions.length}`);
-                    if (activeSessions.length > 0) {
-                        console.log('Sessions:', activeSessions.join(', '));
-                    }
+                const activeSessions = TmuxTaskRunner.getActiveSessions();
+                console.log(`Active Vibe sessions: ${activeSessions.length}`);
+                if (activeSessions.length > 0) {
+                    console.log('Sessions:', activeSessions.join(', '));
                 }
                 break;
+            }
 
             default:
                 console.log(`
