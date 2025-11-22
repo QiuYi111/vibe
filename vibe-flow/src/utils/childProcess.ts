@@ -1,61 +1,80 @@
 /**
  * Child process execution utilities
+ * 
+ * CRITICAL: Uses execa to prevent process deadlocks that plagued the Bash version.
+ * Key protections: timeout, maxBuffer, stdin closure, CI env variables.
  */
 
-import { spawn } from 'child_process';
+import { execa, ExecaError } from 'execa';
 import { ExecResult } from '../types.js';
 
 /**
  * Execute a command and return the result
+ * 
+ * @param cmd - Command to execute
+ * @param args - Command arguments
+ * @param options - Execution options (cwd, env, input, timeout)
+ * @returns ExecResult with stdout, stderr, and exit code
  */
 export async function execCmd(
     cmd: string,
     args: string[],
-    options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }
+    options?: {
+        cwd?: string;
+        env?: NodeJS.ProcessEnv;
+        input?: string;
+        timeout?: number; // milliseconds
+    }
 ): Promise<ExecResult> {
-    return new Promise((resolve) => {
-        const proc = spawn(cmd, args, {
+    try {
+        const result = await execa(cmd, args, {
             cwd: options?.cwd || process.cwd(),
             env: { ...process.env, ...options?.env },
+            input: options?.input || '',  // 🔑 Critical: explicitly close stdin to prevent hanging
+            timeout: options?.timeout || 300000,  // 🔑 Default 5 minutes timeout
+            maxBuffer: 10 * 1024 * 1024,  // 🔑 10MB buffer limit to prevent overflow
+            cleanup: true,  // 🔑 Automatically kill child processes on exit
             shell: false,
+            reject: false,  // Don't throw on non-zero exit, return result instead
         });
 
-        if (options?.input && proc.stdin) {
-            proc.stdin.write(options.input);
-            proc.stdin.end();
-        }
-
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout?.on('data', (data) => {
-            stdout += data.toString();
-        });
-
-        proc.stderr?.on('data', (data) => {
-            stderr += data.toString();
-        });
-
-        proc.on('close', (code) => {
-            resolve({ stdout, stderr, code });
-        });
-
-        proc.on('error', (error) => {
-            resolve({ stdout, stderr: error.message, code: 1 });
-        });
-    });
+        return {
+            stdout: result.stdout,
+            stderr: result.stderr,
+            code: result.exitCode ?? null,
+        };
+    } catch (error) {
+        // Handle timeout and other errors
+        const execaError = error as ExecaError;
+        return {
+            stdout: typeof execaError.stdout === 'string' ? execaError.stdout : '',
+            stderr: typeof execaError.stderr === 'string' ? execaError.stderr : execaError.message,
+            code: execaError.exitCode ?? 1,
+        };
+    }
 }
 
 /**
  * Run Claude CLI with a prompt
+ * 
+ * CRITICAL FIX: Forces non-interactive mode to prevent TTY detection deadlocks
+ * 
+ * @param prompt - The prompt to send to Claude
+ * @param options - Execution options (cwd, context, timeout)
+ * @returns ExecResult with Claude's response
  */
 export async function runClaude(
     prompt: string,
-    options?: { cwd?: string; context?: string }
+    options?: { cwd?: string; context?: string; timeout?: number }
 ): Promise<ExecResult> {
     return execCmd('claude', ['--dangerously-skip-permissions', '-p', prompt], {
-        ...options,
-        input: options?.context
+        cwd: options?.cwd,
+        input: options?.context || '',  // 🔑 Empty string closes stdin
+        timeout: options?.timeout || 5 * 60 * 1000,  // 🔑 5 minute default for LLM calls
+        env: {
+            CI: 'true',  // 🔑 Force non-interactive mode
+            NO_COLOR: '1',  // 🔑 Disable ANSI colors for clean parsing
+        }
     });
 }
 

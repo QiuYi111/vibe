@@ -4,7 +4,7 @@
 
 import { TaskState, SessionState, VibeConfig } from '../types.js';
 import { runClaude, execCmd } from '../utils/childProcess.js';
-import { fileExists, readFile, writeFile } from '../utils/file.js';
+import { fileExists, writeFile } from '../utils/file.js';
 import { log } from '../logger.js';
 import * as path from 'path';
 
@@ -82,7 +82,7 @@ ${diffContent}
 
     // For now, consider review passed unless there's an explicit failure in the review output
     const reviewPassed = !claudeResult.stdout.toLowerCase().includes('failed') &&
-                        !claudeResult.stdout.toLowerCase().includes('error');
+        !claudeResult.stdout.toLowerCase().includes('error');
 
     if (reviewPassed && testResult.code === 0) {
         log.file(reviewLog, '✅ Review passed and tests successful');

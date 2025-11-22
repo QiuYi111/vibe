@@ -1,12 +1,19 @@
 /**
  * JSON extraction utilities (replaces Python JSON_EXTRACTOR)
+ * 
+ * CRITICAL: Uses Zod for runtime Schema validation to catch LLM mistakes early
  */
 
-import { TaskPlanItem } from '../types.js';
+import { TaskPlanSchema } from '../schemas/taskPlan.js';
+import type { TaskPlanItem } from '../schemas/taskPlan.js';
 
 /**
- * Extract JSON array from text content
+ * Extract and validate JSON array from text content
  * Handles markdown code blocks and fallback extraction
+ * 
+ * @param content - Raw text content potentially containing JSON
+ * @returns Validated array of TaskPlanItems
+ * @throws Error with detailed Zod validation message if schema validation fails
  */
 export function extractJsonArrayFromText(content: string): TaskPlanItem[] {
     let jsonStr: string | null = null;
@@ -31,26 +38,28 @@ export function extractJsonArrayFromText(content: string): TaskPlanItem[] {
         throw new Error('No JSON array found in content');
     }
 
-    // 3. Parse and validate
+    // 3. Parse JSON
+    let parsed: unknown;
     try {
-        const parsed = JSON.parse(jsonStr);
-
-        if (!Array.isArray(parsed)) {
-            throw new Error('Extracted JSON is not an array');
-        }
-
-        // Validate each item has required fields
-        for (const item of parsed) {
-            if (!item.id || !item.name || !item.desc) {
-                throw new Error(`Invalid task item: missing required fields (id, name, desc). Got: ${JSON.stringify(item)}`);
-            }
-        }
-
-        return parsed as TaskPlanItem[];
+        parsed = JSON.parse(jsonStr);
     } catch (error) {
         if (error instanceof Error) {
             throw new Error(`JSON parse error: ${error.message}`);
         }
         throw error;
     }
+
+    // 4. 🔑 CRITICAL: Validate with Zod
+    //    This catches missing fields, wrong types, etc. from LLM output
+    //    The error message can be fed back to Claude for retry
+    const validationResult = TaskPlanSchema.safeParse(parsed);
+
+    if (!validationResult.success) {
+        const formattedErrors = validationResult.error.format();
+        throw new Error(
+            `Schema validation failed. Please fix the following errors and regenerate:\n${JSON.stringify(formattedErrors, null, 2)}`
+        );
+    }
+
+    return validationResult.data;
 }

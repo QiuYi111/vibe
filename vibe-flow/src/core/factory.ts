@@ -93,17 +93,12 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
 
         }, config.maxRetries, 2000);
 
-        if (task.status === 'PENDING') {
-            task.status = 'FAILED';
-        }
-
-        // Max retries exceeded
-        log.task(task.id, `❌ Task failed after ${config.maxRetries} attempts`, config.logDir);
-        task.status = 'FAILED';
+        // If we got here without throwing, task succeeded
+        log.success(`✅ Task ${task.name} completed successfully`);
 
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        log.task(task.id, `❌ Fatal error: ${errorMsg}`, config.logDir);
+        log.task(task.id, `❌ Task failed after ${config.maxRetries} attempts: ${errorMsg}`, config.logDir);
         task.status = 'FAILED';
     }
 }

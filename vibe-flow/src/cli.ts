@@ -8,6 +8,10 @@ import { loadConfig } from './config.js';
 import { log } from './logger.js';
 import { commandExists } from './utils/childProcess.js';
 import { ensureDir } from './utils/file.js';
+import { registerShutdownHandlers } from './utils/cleanup.js';
+
+// 🔑 Register signal handlers FIRST to ensure cleanup on exit
+registerShutdownHandlers();
 
 /**
  * Display ASCII banner
