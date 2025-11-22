@@ -194,6 +194,12 @@ function merge_manager() {
     echo -e "${BLUE}🔀 [Merge Manager] Integrating ${#task_branches[@]} branches...${NC}"
     
     for branch in "${task_branches[@]}"; do
+        # Check if branch exists
+        if ! git show-ref --verify --quiet "refs/heads/$branch"; then
+             echo -e "${YELLOW}⚠️  Branch $branch not found. Skipping merge.${NC}"
+             continue
+        fi
+
         if git merge --no-edit "$branch" > /dev/null 2>&1; then
             echo -e "${GREEN}✅ Merged $branch${NC}"
         else
@@ -665,6 +671,13 @@ $review_feedback
 Fix the issues identified in the review. Then commit: git commit -am 'Agent: $name - Fix attempt $retries'
 "
                 claude --dangerously-skip-permissions -p "$heal_prompt" >> "$log_file" 2>&1
+            fi
+
+            # Check for API Rate Limits (429)
+            if grep -q "429" "$log_file" || grep -i "rate limit" "$log_file"; then
+                 echo "⚠️ API Rate Limit (429) detected. Sleeping for 60s..." >> "$log_file"
+                 sleep 60
+                 # Retry without consuming a retry attempt if possible, or just accept it takes one slot
             fi
 
             # Check if agent committed
