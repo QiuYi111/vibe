@@ -1,0 +1,19 @@
+# Development artifacts (not needed in NPM package)
+.vibe_logs/
+.vibe_worktrees/
+*.log
+.DS_Store
+project_index.xml
+raw_context.xml
+vibe_plan.json
+vibe_report.md
+vibe_cto_report.md
+REQUIREMENTS.md
+
+# Test files
+test_*.sh
+test_*.txt
+
+# Development docs
+UPGRADE_GUIDE.md
+INTEGRATION_PHASE.md
