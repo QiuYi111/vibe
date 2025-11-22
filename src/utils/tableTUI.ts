@@ -304,6 +304,8 @@ export class TableTUI {
     private async syncWithTmux(): Promise<void> {
         try {
             const { execSync } = await import('child_process');
+            const fs = await import('fs');
+            const path = await import('path');
 
             // 获取所有活跃的tmux会话
             const output = execSync('tmux ls -F "#{session_name}"', { encoding: 'utf-8' });
@@ -314,19 +316,38 @@ export class TableTUI {
 
             // 同步内部状态
             this.rows.forEach((row, taskId) => {
-                const sessionId = `vibe-task-${taskId}`;
-                const isSessionActive = activeSessions.includes(sessionId);
+                // 使用row中记录的实际sessionId，而不是自己构造
+                // 因为sessionId可能包含项目前缀，如 vibe-task-optimization_task_3
+                const expectedSessionId = row.sessionId;
+                const doneSignalFile = path.join(process.cwd(), `.vibe_done_${taskId}`);
+                const isSessionActive = expectedSessionId ? activeSessions.includes(expectedSessionId) : false;
+                const isTaskCompleted = fs.existsSync(doneSignalFile);
 
-                // 如果内部状态显示waiting但tmux会话存在，更新状态
-                if (row.status === 'waiting' && isSessionActive && !row.sessionId) {
-                    row.sessionId = sessionId;
-                    row.status = 'running';
-                    row.startTime = Date.now();
+                // 根据实际状态更新内部状态，消除特殊情况
+                if (isTaskCompleted) {
+                    // 任务已完成，无论tmux会话是否还在
+                    if (row.status !== 'completed' && row.status !== 'reviewing') {
+                        row.status = 'completed';
+                        row.sessionId = undefined;
+                        row.progress = '✅ Ready for merge';
+                    }
+                } else if (isSessionActive) {
+                    // tmux会话存在且任务未完成 - 保持当前状态
+                    // 不做任何改变，因为状态应该由ProgressMonitor管理
+                } else if (!isSessionActive && row.sessionId) {
+                    // 之前有session但现在消失了，且任务未完成 = 可能异常
+                    // 但也可能是正常的状态转换（如从running到reviewing）
+                    // 所以只在running状态下才标记为失败
+                    if (row.status === 'running') {
+                        row.status = 'failed';
+                        row.sessionId = undefined;
+                        row.progress = '❌ Session terminated unexpectedly';
+                    }
                 }
             });
         } catch {
-            // tmux命令失败，忽略同步错误
-            // 这可能是tmux不可用或权限问题
+            // tmux不可用时不更新状态，避免错误信息污染界面
+            // 但这不应该发生，因为调用前已经检查过tmux可用性
         }
     }
 

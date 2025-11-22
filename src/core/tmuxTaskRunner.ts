@@ -176,7 +176,9 @@ export class TmuxTaskRunner {
         // Kill existing session
         try {
             execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
-        } catch { }
+        } catch {
+            // Ignore error if session doesn't exist
+        }
 
         // Start session with bash and claude
         // We use 'read' to keep the window open if claude crashes or exits unexpectedly
@@ -251,9 +253,13 @@ export class TmuxTaskRunner {
      */
     private static async waitForSentinel(doneSignalFile: string, sessionId: string, timeout: number): Promise<void> {
         const startTime = Date.now();
+        const REMINDER_INTERVAL = 5 * 60 * 1000; // 5 minutes
+        let lastReminderTime = startTime;
 
         return new Promise((resolve, reject) => {
             const checkInterval = setInterval(() => {
+                const elapsed = Date.now() - startTime;
+
                 // Check if session is still alive
                 try {
                     execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
@@ -277,8 +283,30 @@ export class TmuxTaskRunner {
                     return;
                 }
 
+                // Send periodic reminder to Claude
+                if (elapsed - lastReminderTime >= REMINDER_INTERVAL) {
+                    lastReminderTime = elapsed;
+                    const reminderMessage = `\n\n[REMINDER] You've been working for ${Math.floor(elapsed / 60000)} minutes. Please remember to create the sentinel file "${path.basename(doneSignalFile)}" when you complete ALL tasks.\n`;
+
+                    try {
+                        // Send reminder via tmux send-keys
+                        const loadBuffer = spawn('tmux', ['load-buffer', '-']);
+                        loadBuffer.stdin.write(reminderMessage);
+                        loadBuffer.stdin.end();
+
+                        loadBuffer.on('close', () => {
+                            execSync(`tmux paste-buffer -t ${sessionId}`);
+                            execSync(`tmux send-keys -t ${sessionId} Enter`);
+                        });
+
+                        console.log(`⏰ Sent reminder to Claude (${Math.floor(elapsed / 60000)}m elapsed)`);
+                    } catch (e) {
+                        console.error(`Failed to send reminder: ${e}`);
+                    }
+                }
+
                 // Check timeout
-                if (timeout > 0 && Date.now() - startTime > timeout) {
+                if (timeout > 0 && elapsed > timeout) {
                     clearInterval(checkInterval);
                     reject(new Error(`Task timeout after ${timeout / 1000}s`));
                 }
@@ -297,7 +325,9 @@ export class TmuxTaskRunner {
             await new Promise(r => setTimeout(r, 1500));
             // Force kill if it's still there (optional, but keeps things clean)
             execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
-        } catch { }
+        } catch {
+            // Ignore error - session will be force-killed anyway
+        }
     }
 
     /**
@@ -316,7 +346,9 @@ export class TmuxTaskRunner {
                 if (fs.existsSync(file)) {
                     fs.unlinkSync(file);
                 }
-            } catch { }
+            } catch {
+                // Ignore error - file doesn't exist
+            }
         });
     }
 
@@ -326,7 +358,9 @@ export class TmuxTaskRunner {
     private static killSession(sessionId: string): void {
         try {
             execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
-        } catch { }
+        } catch {
+            // Ignore error if session doesn't exist
+        }
     }
 
     /**
@@ -387,8 +421,12 @@ export class TmuxTaskRunner {
                 try {
                     execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
                     console.log(`🧹 Cleaned up session: ${sessionId}`);
-                } catch { }
+                } catch {
+                    // Ignore error if session doesn't exist
+                }
             }
-        } catch { }
+        } catch {
+            // Ignore error - tmux not available or no sessions
+        }
     }
 }
