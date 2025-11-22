@@ -1,6 +1,6 @@
 {
   "name": "@jingyi_qiu/vibe-flow",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "Git-Native Autonomous Coding Engine powered by Claude",
   "bin": {
