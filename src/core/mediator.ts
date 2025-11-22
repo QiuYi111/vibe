@@ -73,16 +73,18 @@ Files: ${conflictFiles}
 ${conflictDiff}
 
 [TASK]
-1. Resolve the conflicts in the files.
-2. Use your native file editing tools.
-3. Stage the resolved files: git add <files>
-4. Verify that no conflict markers remain.
+1. Resolve the conflicts in the files using your native file editing tools.
+2. Verify that no conflict markers remain (search for <<<<<<, ======, >>>>>>).
+3. Stage ALL resolved files: git add <files>
+4. **COMMIT the resolution**: git commit --no-edit
+5. Verify the commit succeeded: git log -1 --oneline
 
 [OUTPUT REQUIREMENT]
 When finished, write a JSON object to the output file:
 {
   "status": "RESOLVED" | "FAILED",
-  "message": "Brief summary of resolution"
+  "message": "Brief summary of resolution",
+  "commitHash": "First 8 chars of commit hash (if successful)"
 }
 `;
 
@@ -113,20 +115,31 @@ When finished, write a JSON object to the output file:
             // Check if conflicts are actually resolved
             if (await hasUnresolvedConflicts()) {
                 log.error('❌ Mediator claimed success but conflicts remain');
+                log.file(mediatorLog, '❌ VERIFICATION FAILED: Unresolved conflicts detected');
                 return false;
             }
 
-            // Complete the merge
-            const commitResult = await runGit(['commit', '--no-edit']);
-            if (commitResult.code !== 0) {
-                log.error('❌ Failed to commit resolved conflicts');
+            // Verify that Claude actually committed
+            if (!result.commitHash) {
+                log.error('❌ Mediator did not provide commit hash');
+                log.file(mediatorLog, '❌ VERIFICATION FAILED: No commit hash in output');
                 return false;
             }
 
-            log.success('✅ Conflicts resolved by AI Mediator');
+            // Verify the commit exists
+            const logResult = await runGit(['log', '-1', '--oneline']);
+            if (logResult.code !== 0 || !logResult.stdout.includes(result.commitHash)) {
+                log.error('❌ Mediator claimed to commit but commit not found');
+                log.file(mediatorLog, `❌ VERIFICATION FAILED: Commit ${result.commitHash} not found`);
+                return false;
+            }
+
+            log.success(`✅ Conflicts resolved by AI Mediator (${result.commitHash})`);
+            log.file(mediatorLog, `✅ SUCCESS: Conflicts resolved and committed (${result.commitHash})`);
             return true;
         } else {
             log.error(`❌ Mediator failed: ${result.message}`);
+            log.file(mediatorLog, `❌ FAILED: ${result.message}`);
             return false;
         }
 
