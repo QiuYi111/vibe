@@ -69,20 +69,35 @@ export class TableTUI {
 
         // 更新状态
         switch (status) {
-            case 'RUNNING':
+            case 'running':
                 row.status = 'running';
                 row.startTime = Date.now();
                 if (sessionId) {
                     row.sessionId = sessionId;
                 }
                 break;
-            case 'COMPLETED':
+            case 'reviewing':
                 row.status = 'reviewing';
-                row.progress = '🔍 Review in progress';
+                if (sessionId) {
+                    row.sessionId = sessionId;
+                }
+                if (!progress) {
+                    row.progress = '🔍 Review in progress';
+                }
                 break;
-            case 'FAILED':
+            case 'completed':
+                row.status = 'completed';
+                row.sessionId = undefined; // Clear session ID
+                if (!progress) {
+                    row.progress = '✅ Ready for merge';
+                }
+                break;
+            case 'failed':
                 row.status = 'failed';
-                row.progress = '❌ Task failed';
+                row.sessionId = undefined; // Clear session ID
+                if (!progress) {
+                    row.progress = '❌ Task failed';
+                }
                 break;
         }
 
