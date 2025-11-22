@@ -25,16 +25,62 @@ export class TmuxTaskRunner {
     private static readonly SESSION_PREFIX = 'vibe-task';
     private static readonly POLL_INTERVAL = 2000; // 2秒检查一次
     private static readonly STARTUP_DELAY = 500; // 等待tmux启动
+    private static readonly MAX_SESSIONS = 10; // 最大并发会话数
 
     /**
-     * 检查tmux是否可用
+     * 检查tmux是否可用（带错误提示）
      */
-    static async isTmuxAvailable(): Promise<boolean> {
+    static async checkTmuxAvailability(): Promise<void> {
         try {
             execSync('tmux -V', { stdio: 'ignore' });
-            return true;
         } catch {
-            return false;
+            throw new Error('tmux is required but not available. Please install tmux: brew install tmux (macOS) or apt-get install tmux (Ubuntu)');
+        }
+    }
+
+    /**
+     * 检查会话数量限制
+     */
+    static async checkSessionLimits(): Promise<void> {
+        const activeSessions = this.getActiveSessions();
+        if (activeSessions.length >= this.MAX_SESSIONS) {
+            throw new Error(`Too many active sessions (${activeSessions.length}/${this.MAX_SESSIONS}). Please complete some tasks first.`);
+        }
+    }
+
+    /**
+     * 清理旧的会话
+     */
+    static async cleanupOldSessions(): Promise<void> {
+        const sessions = this.getActiveSessions();
+
+        // 如果会话数量未达到限制，无需清理
+        if (sessions.length <= this.MAX_SESSIONS * 0.8) {
+            return;
+        }
+
+        // 获取会话创建时间并清理最老的会话
+        for (const sessionId of sessions) {
+            try {
+                // 检查会话是否真的存在
+                execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
+
+                // 获取会话创建时间（通过tmux session的created时间）
+                const creationTime = execSync(`tmux display-message -p -t ${sessionId} '#{session_created}'`, {
+                    encoding: 'utf-8'
+                }).trim();
+
+                const sessionAge = Date.now() - parseInt(creationTime) * 1000;
+
+                // 清理超过1小时的僵尸会话
+                if (sessionAge > 3600000) { // 1小时
+                    console.log(`🧹 Cleaning up old session: ${sessionId}`);
+                    execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
+                }
+            } catch {
+                // 会话已不存在，从列表中移除
+                continue;
+            }
         }
     }
 
@@ -43,6 +89,11 @@ export class TmuxTaskRunner {
      */
     static async runClaudeInTmux(options: TmuxTaskOptions): Promise<string | null> {
         const { taskId, prompt, cwd, needsOutput = false, outputFormat = 'text', timeout = 0 } = options;
+
+        // 健壮性检查
+        await this.checkTmuxAvailability();
+        await this.checkSessionLimits();
+        await this.cleanupOldSessions();
 
         const sessionId = `${this.SESSION_PREFIX}-${taskId}`;
         const promptFile = path.join(cwd, `.vibe_prompt_${taskId}.txt`);
@@ -119,27 +170,29 @@ export class TmuxTaskRunner {
             `echo "📁 Working Directory: $(pwd)"`,
             `echo "🤖 Starting Claude..."`,
             `echo ""`,
-            `claude "$(cat '${promptFile}')"`, // 关键：去掉 -p，进入交互模式
+            `claude --dangerously-skip-permissions "$(cat '${promptFile}')"`, // 关键：添加权限跳过标志
             `exit_code=$?`,
             `echo ""`,
-            `if [ $exit_code -eq 0 ]; then`,
-            `  echo "✅ Task completed successfully"`,
-            `  exit 0`,
-            `else`,
-            `  echo "❌ Task failed with exit code $exit_code"`,
-            `  read -p "Press Enter to exit..." || true`,
-            `  exit 1`,
-            `fi`
+            `if [ $exit_code -eq 0 ]; then echo "✅ Task completed successfully"; exit 0; else echo "❌ Task failed with exit code $exit_code"; read -p "Press Enter to exit..." || true; exit 1; fi`
         ].join(' && ');
 
         // 启动detached tmux session
-        const tmux = spawn('tmux', ['new-session', '-d', '-s', sessionId, `bash -c '${innerCmd}'`]);
+        const tmux = spawn('tmux', ['new-session', '-d', '-s', sessionId, 'bash', '-c', innerCmd]);
 
         return new Promise((resolve, reject) => {
             tmux.on('error', reject);
             tmux.on('close', (code) => {
                 if (code === 0) {
-                    setTimeout(resolve, this.STARTUP_DELAY); // 等待启动完成
+                    // 等待一小段时间让tmux完全启动
+                    setTimeout(() => {
+                        // 验证tmux会话是否真的创建成功
+                        try {
+                            execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
+                            resolve();
+                        } catch {
+                            reject(new Error(`Tmux session ${sessionId} was not created successfully`));
+                        }
+                    }, this.STARTUP_DELAY);
                 } else {
                     reject(new Error(`Failed to start tmux session: ${code}`));
                 }
@@ -175,7 +228,7 @@ export class TmuxTaskRunner {
                     }
 
                     // Session仍在运行，继续等待
-                } catch (error) {
+                } catch {
                     // Session不存在了，任务完成
                     clearInterval(checkInterval);
                     resolve();
@@ -236,7 +289,7 @@ export class TmuxTaskRunner {
             return;
         }
 
-        console.log(`🎬 Active Vibe Sessions (${sessions.length}):`);
+        console.log(`🎬 Active Vibe Sessions (${sessions.length}/${this.MAX_SESSIONS}):`);
         console.log('-'.repeat(50));
 
         sessions.forEach(sessionId => {
@@ -253,5 +306,34 @@ export class TmuxTaskRunner {
                 console.log(`📺 ${sessionId} (status unknown)`);
             }
         });
+    }
+
+    /**
+     * 强制清理所有vibe session
+     */
+    static async cleanup(): Promise<void> {
+        try {
+            // 首先检查tmux是否可用
+            await this.checkTmuxAvailability();
+
+            const sessions = this.getActiveSessions();
+            if (sessions.length === 0) {
+                console.log('📭 No active Vibe sessions to clean');
+                return;
+            }
+
+            for (const sessionId of sessions) {
+                try {
+                    execSync(`tmux kill-session -t ${sessionId}`, { stdio: 'ignore' });
+                    console.log(`🧹 Cleaned up session: ${sessionId}`);
+                } catch {
+                    // 忽略单个会话清理错误
+                    console.log(`⚠️ Session ${sessionId} already ended or not found`);
+                }
+            }
+        } catch {
+            // tmux不可用，无需清理
+            console.log('📭 Tmux not available, no sessions to clean');
+        }
     }
 }
