@@ -28,9 +28,7 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {
-    "repomix": "^1.9.1"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0",

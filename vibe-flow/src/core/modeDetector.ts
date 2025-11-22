@@ -42,7 +42,7 @@ export function detectDomain(cwd: string = process.cwd()): Domain {
 /**
  * Detect operation mode based on git and index file status
  */
-export function detectMode(cwd: string = process.cwd(), indexFile: string = 'project_index.xml'): Mode {
+export function detectMode(cwd: string = process.cwd(), indexFile: string = 'project_index.json'): Mode {
     // SCRATCH: no .git directory
     if (!dirExists(path.join(cwd, '.git'))) {
         return 'SCRATCH';

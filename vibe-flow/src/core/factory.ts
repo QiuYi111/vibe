@@ -3,7 +3,7 @@
  */
 
 import { TaskState, SessionState, VibeConfig, TaskPlanItem, TaskStatus } from '../types.js';
-import { runClaude, execCmd } from '../utils/childProcess.js';
+import { runClaude, execCmd, execWithRetry } from '../utils/childProcess.js';
 import { createTaskWorktree } from '../git/gitWorktree.js';
 import { runReviewAgent } from './review.js';
 import { log } from '../logger.js';
@@ -47,49 +47,34 @@ async function runSingleTask(
 
         let reviewFeedback = '';
 
-        // Self-healing loop
-        while (task.attempts < config.maxRetries) {
-            // Build or heal
-            if (task.attempts === 0) {
-                const buildResult = await runClaude(buildPrompt, { cwd: worktreePath });
-                log.task(task.id, buildResult.stdout, config.logDir);
-                log.task(task.id, buildResult.stderr, config.logDir);
-            } else {
-                // Healing with review feedback
-                const healPrompt = `
+        // Self-healing loop using unified retry mechanism
+        await execWithRetry(async () => {
+            // Determine prompt based on attempt
+            const prompt = task.attempts === 0
+                ? buildPrompt
+                : `
 [PREVIOUS COMMIT] ${(await execCmd('git', ['log', '--oneline', '-1'], { cwd: worktreePath })).stdout}
 [REVIEW FEEDBACK]
 ${reviewFeedback}
 
 [INSTRUCTION]
-Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${task.name} - Fix attempt ${task.attempts}'
+Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${task.name} - Fix attempt ${task.attempts + 1}'
 `;
-                const healResult = await runClaude(healPrompt, { cwd: worktreePath });
-                log.task(task.id, healResult.stdout, config.logDir);
-                log.task(task.id, healResult.stderr, config.logDir);
-            }
 
-            // Check for API Rate Limits (429)
-            const logContent = readFile(task.logFile);
-            if (logContent.includes('429') || logContent.toLowerCase().includes('rate limit')) {
-                log.task(task.id, '⚠️ API Rate Limit (429) detected. Sleeping for 60s...', config.logDir);
-                await new Promise(resolve => setTimeout(resolve, 60000));
-            }
+            // Execute Claude with retry logic
+            const result = await runClaude(prompt, { cwd: worktreePath });
+            log.task(task.id, result.stdout, config.logDir);
+            log.task(task.id, result.stderr, config.logDir);
 
             // Check if agent committed
             const logResult = await execCmd('git', ['log', '--oneline', '-1'], { cwd: worktreePath });
             if (!logResult.stdout.includes(`Agent: ${task.name}`)) {
-                log.task(task.id, '⚠️ Agent did not commit, retrying...', config.logDir);
-                task.attempts++;
-                continue;
+                throw new Error('Agent did not commit changes');
             }
 
             // Run Review Agent
-            if (await runReviewAgent(task, session, config)) {
-                log.task(task.id, '✅ Implementation passed review and tests', config.logDir);
-                task.status = task.attempts > 0 ? 'HEALED' : 'SUCCEEDED';
-                return;
-            } else {
+            const reviewPassed = await runReviewAgent(task, session, config);
+            if (!reviewPassed) {
                 // Extract review feedback for next iteration
                 const feedbackFile = path.join(config.logDir, `review_report_${task.id}.md`);
                 if (fileExists(feedbackFile)) {
@@ -98,9 +83,18 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                     reviewFeedback = 'Review failed but no feedback file found';
                 }
 
-                log.task(task.id, `⚠️ Review failed, healing (${task.attempts + 1}/${config.maxRetries})...`, config.logDir);
                 task.attempts++;
+                throw new Error(`Review failed, attempt ${task.attempts}`);
             }
+
+            // Success
+            task.status = task.attempts > 0 ? 'HEALED' : 'SUCCEEDED';
+            return;
+
+        }, config.maxRetries, 2000);
+
+        if (task.status === 'PENDING') {
+            task.status = 'FAILED';
         }
 
         // Max retries exceeded

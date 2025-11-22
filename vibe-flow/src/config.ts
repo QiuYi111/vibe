@@ -5,7 +5,7 @@
 import { VibeConfig } from './types.js';
 
 // Default configuration constants
-const DEFAULT_INDEX_FILE = 'project_index.xml';
+const DEFAULT_INDEX_FILE = 'project_index.json';
 const DEFAULT_PLAN_FILE = 'vibe_plan.json';
 const DEFAULT_REPORT_FILE = 'vibe_report.md';
 const DEFAULT_LOG_DIR = '.vibe_logs';

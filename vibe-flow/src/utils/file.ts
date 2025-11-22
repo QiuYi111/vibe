@@ -67,3 +67,18 @@ export function ensureDir(dirPath: string): void {
         fs.mkdirSync(dirPath, { recursive: true });
     }
 }
+
+/**
+ * Read and parse JSON file safely
+ */
+export function readJsonFile(filePath: string): any {
+    if (!fileExists(filePath)) {
+        throw new Error(`JSON file not found: ${filePath}`);
+    }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    try {
+        return JSON.parse(content);
+    } catch (error) {
+        throw new Error(`Invalid JSON in file ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}

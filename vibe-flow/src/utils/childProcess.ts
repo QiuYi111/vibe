@@ -11,7 +11,7 @@ import { ExecResult } from '../types.js';
 export async function execCmd(
     cmd: string,
     args: string[],
-    options?: { cwd?: string; env?: NodeJS.ProcessEnv }
+    options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }
 ): Promise<ExecResult> {
     return new Promise((resolve) => {
         const proc = spawn(cmd, args, {
@@ -19,6 +19,11 @@ export async function execCmd(
             env: { ...process.env, ...options?.env },
             shell: false,
         });
+
+        if (options?.input && proc.stdin) {
+            proc.stdin.write(options.input);
+            proc.stdin.end();
+        }
 
         let stdout = '';
         let stderr = '';
@@ -46,9 +51,12 @@ export async function execCmd(
  */
 export async function runClaude(
     prompt: string,
-    options?: { cwd?: string }
+    options?: { cwd?: string; context?: string }
 ): Promise<ExecResult> {
-    return execCmd('claude', ['--dangerously-skip-permissions', '-p', prompt], options);
+    return execCmd('claude', ['--dangerously-skip-permissions', '-p', prompt], {
+        ...options,
+        input: options?.context
+    });
 }
 
 /**
@@ -61,15 +69,6 @@ export async function runGit(
     return execCmd('git', args, options);
 }
 
-/**
- * Run repomix
- */
-export async function runRepomix(
-    args: string[],
-    options?: { cwd?: string }
-): Promise<ExecResult> {
-    return execCmd('npx', ['repomix', ...args], options);
-}
 
 /**
  * Check if a command exists in PATH
@@ -77,4 +76,38 @@ export async function runRepomix(
 export async function commandExists(cmd: string): Promise<boolean> {
     const result = await execCmd('command', ['-v', cmd]);
     return result.code === 0;
+}
+
+/**
+ * Execute with retry and rate limit handling
+ */
+export async function execWithRetry<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    delayMs: number = 1000
+): Promise<T> {
+    let retryCount = 0;
+
+    while (retryCount < maxRetries) {
+        try {
+            return await fn();
+        } catch (error) {
+            retryCount++;
+
+            if (retryCount >= maxRetries) {
+                throw error;
+            }
+
+            // Check for rate limiting
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            if (errorMsg.includes('429') || errorMsg.toLowerCase().includes('rate limit')) {
+                console.warn(`⚠️ Rate limit detected, waiting 60s...`);
+                await new Promise(resolve => setTimeout(resolve, 60000));
+            } else {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+    }
+
+    throw new Error(`Max retries (${maxRetries}) exceeded`);
 }
