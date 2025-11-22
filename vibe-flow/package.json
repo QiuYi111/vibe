@@ -3,11 +3,15 @@
   "version": "5.0.6",
   "description": "Git-Native Autonomous Coding Engine powered by Claude",
   "bin": {
-    "vibe": "./bin/vibe"
+    "vibe": "./dist/cli.js",
+    "vibe-legacy": "./bin/vibe"
   },
   "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/cli.ts",
     "test": "echo \"Run 'vibe' locally to test\" && exit 0",
-    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\""
+    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\"",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "ai",
@@ -26,6 +30,11 @@
   },
   "dependencies": {
     "repomix": "^1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "ts-node": "^10.9.0"
   },
   "repository": {
     "type": "git",

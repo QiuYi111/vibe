@@ -65,14 +65,29 @@ graph TD
 - Claude CLI (Anthropic)
 - jq
 
-### 安装方式
+### Installation
 
 ```bash
 npm install -g @jingyi_qiu/vibe-flow
 ```
 
-### 基本使用
+## Usage
 
+**TypeScript Implementation (Recommended):**
+```bash
+vibe
+```
+
+**Legacy Bash Implementation:**
+```bash
+vibe-legacy
+```
+
+Both commands provide the same functionality. The TypeScript version offers better error handling, type safety, and maintainability.
+
+## Architecture
+
+Vibe Flow v5.0 is now implemented in TypeScript with the following architecture:
 1. 在项目根目录创建 `REQUIREMENTS.md` 文件，描述你的需求
 2. 运行：
 
