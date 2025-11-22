@@ -29,7 +29,7 @@ export function detectDomain(cwd: string = process.cwd()): Domain {
     // PYTHON_GENERIC: any .py files in root
     try {
         const files = fs.readdirSync(cwd);
-        if (files.some(file => file.endsWith('.py'))) {
+        if (files.some((file) => file.endsWith('.py'))) {
             return 'PYTHON_GENERIC';
         }
     } catch {

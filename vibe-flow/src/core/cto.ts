@@ -2,7 +2,6 @@
  * CTO Review: Architectural audit
  */
 
-
 import { runGit, runClaude } from '../utils/childProcess.js';
 import { writeFile, fileExists, readFile } from '../utils/file.js';
 import { log } from '../logger.js';
@@ -68,7 +67,7 @@ Use Linus Torvalds' standards: good taste, simplicity, clarity.
         log.cyan('=== CTO Review Summary ===');
         const content = readFile(reportFile);
         const lines = content.split('\n').slice(0, 10);
-        lines.forEach(line => console.log(line));
+        lines.forEach((line) => console.log(line));
         log.cyan(`=== (Full report in ${reportFile}) ===`);
     }
 }

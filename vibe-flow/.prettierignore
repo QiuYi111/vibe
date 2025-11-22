@@ -1,0 +1,5 @@
+node_modules
+dist
+.vibe_worktrees
+.vibe_logs
+*.log

@@ -1,6 +1,6 @@
 /**
  * JSON extraction utilities (replaces Python JSON_EXTRACTOR)
- * 
+ *
  * CRITICAL: Uses Zod for runtime Schema validation to catch LLM mistakes early
  */
 
@@ -10,7 +10,7 @@ import type { TaskPlanItem } from '../schemas/taskPlan.js';
 /**
  * Extract and validate JSON array from text content
  * Handles markdown code blocks and fallback extraction
- * 
+ *
  * @param content - Raw text content potentially containing JSON
  * @returns Validated array of TaskPlanItems
  * @throws Error with detailed Zod validation message if schema validation fails

@@ -53,11 +53,13 @@ Constraint: Max ${config.maxParallelAgents} parallel agents, ensure tasks modify
         tasks = tasks.map((task: any) => ({
             id: task.id || `task_${Math.random().toString(36).substr(2, 9)}`,
             name: task.name || task.title || 'Unknown Task',
-            desc: task.desc || task.description || 'No description'
+            desc: task.desc || task.description || 'No description',
         }));
     } catch (error) {
         // Fallback: try to parse from stdout if file not created
-        throw new Error(`Failed to read workflow from ${workflowFile}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(
+            `Failed to read workflow from ${workflowFile}: ${error instanceof Error ? error.message : String(error)}`
+        );
     }
 
     // Write plan file

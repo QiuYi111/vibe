@@ -1,6 +1,6 @@
 /**
  * Cleanup utilities for graceful shutdown
- * 
+ *
  * Handles SIGINT/SIGTERM to cleanup worktrees and prevent orphan processes
  */
 
@@ -14,7 +14,7 @@ const WORKTREE_BASE_DIR = '.vibe_worktrees';
 
 /**
  * Cleanup all vibe worktrees
- * 
+ *
  * This function is called on process exit to ensure no orphan worktrees remain
  */
 export async function cleanupAllWorktrees(): Promise<void> {
@@ -28,8 +28,8 @@ export async function cleanupAllWorktrees(): Promise<void> {
         // Get all worktree directories
         const entries = fs.readdirSync(WORKTREE_BASE_DIR, { withFileTypes: true });
         const worktreeDirs = entries
-            .filter(entry => entry.isDirectory())
-            .map(entry => path.join(WORKTREE_BASE_DIR, entry.name));
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => path.join(WORKTREE_BASE_DIR, entry.name));
 
         // Remove each worktree
         for (const worktreePath of worktreeDirs) {
@@ -53,7 +53,7 @@ export async function cleanupAllWorktrees(): Promise<void> {
 
 /**
  * Register signal handlers for graceful shutdown
- * 
+ *
  * Listens for SIGINT (Ctrl+C) and SIGTERM and performs cleanup before exit
  */
 export function registerShutdownHandlers(): void {

@@ -12,7 +12,8 @@ const DEFAULT_LOG_DIR = '.vibe_logs';
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_PARALLEL_AGENTS = 2;
 const DEFAULT_MAX_CONTEXT_SIZE_KB = 500;
-const DEFAULT_IGNORE_PATTERNS = '**/*.lock,**/node_modules,**/dist,**/.git,**/.DS_Store,**/build,**/.pio,**/.env*,**/*.key,**/secrets.*,**/__pycache__';
+const DEFAULT_IGNORE_PATTERNS =
+    '**/*.lock,**/node_modules,**/dist,**/.git,**/.DS_Store,**/build,**/.pio,**/.env*,**/*.key,**/secrets.*,**/__pycache__';
 
 /**
  * Load configuration from environment variables with defaults
@@ -22,9 +23,7 @@ export function loadConfig(): VibeConfig {
         ? parseInt(process.env.MAX_PARALLEL_AGENTS, 10)
         : DEFAULT_MAX_PARALLEL_AGENTS;
 
-    const maxRetries = process.env.MAX_RETRIES
-        ? parseInt(process.env.MAX_RETRIES, 10)
-        : DEFAULT_MAX_RETRIES;
+    const maxRetries = process.env.MAX_RETRIES ? parseInt(process.env.MAX_RETRIES, 10) : DEFAULT_MAX_RETRIES;
 
     // Validate parsed numbers
     if (isNaN(maxParallelAgents) || maxParallelAgents < 1) {

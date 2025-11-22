@@ -67,8 +67,8 @@ Be decisive. This is your codebase now.
  * Merge Manager: Orchestrate branch integration
  */
 export async function runMergeManager(tasks: TaskState[], config: VibeConfig): Promise<void> {
-    const successfulTasks = tasks.filter(t => t.status === 'SUCCEEDED' || t.status === 'HEALED');
-    const taskBranches = successfulTasks.map(t => t.branchName);
+    const successfulTasks = tasks.filter((t) => t.status === 'SUCCEEDED' || t.status === 'HEALED');
+    const taskBranches = successfulTasks.map((t) => t.branchName);
 
     log.info(`🔀 [Merge Manager] Integrating ${taskBranches.length} branches...`);
 

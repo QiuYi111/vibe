@@ -10,6 +10,10 @@
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
     "test": "echo \"Run 'vibe' locally to test\" && exit 0",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
     "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\"",
     "prepublishOnly": "npm run build"
   },
@@ -35,6 +39,11 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.47.0",
+    "@typescript-eslint/parser": "^8.47.0",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
     "ts-node": "^10.9.0",
     "typescript": "^5.3.0"
   },

@@ -33,7 +33,7 @@ ${planContent}
 ${gitStatus}
 
 [TASK RESULTS]
-${session.tasks.map(t => `- ${t.name} (${t.id}): ${t.status} (${t.attempts} attempts)`).join('\n')}
+${session.tasks.map((t) => `- ${t.name} (${t.id}): ${t.status} (${t.attempts} attempts)`).join('\n')}
 
 Generate a concise markdown report with:
 - Session Overview

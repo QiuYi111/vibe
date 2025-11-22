@@ -11,11 +11,7 @@ import * as path from 'path';
 /**
  * Run Review Agent for a task
  */
-export async function runReviewAgent(
-    task: TaskState,
-    session: SessionState,
-    config: VibeConfig
-): Promise<boolean> {
+export async function runReviewAgent(task: TaskState, session: SessionState, config: VibeConfig): Promise<boolean> {
     log.info(`🔍 [Review Agent] Analyzing task: ${task.name}`);
 
     const reviewLog = path.join(config.logDir, `review_${task.id}.log`);
@@ -81,8 +77,8 @@ ${diffContent}
     log.file(reviewLog, testResult.stderr);
 
     // For now, consider review passed unless there's an explicit failure in the review output
-    const reviewPassed = !claudeResult.stdout.toLowerCase().includes('failed') &&
-        !claudeResult.stdout.toLowerCase().includes('error');
+    const reviewPassed =
+        !claudeResult.stdout.toLowerCase().includes('failed') && !claudeResult.stdout.toLowerCase().includes('error');
 
     if (reviewPassed && testResult.code === 0) {
         log.file(reviewLog, '✅ Review passed and tests successful');

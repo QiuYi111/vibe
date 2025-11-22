@@ -104,7 +104,6 @@ export async function runSession(config: VibeConfig): Promise<void> {
         log.cyan(`📊 Session Report: ${config.reportFile}`);
         log.cyan('🧐 CTO Review: vibe_cto_report.md');
         log.cyan(`📝 Logs: ${config.logDir}`);
-
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`❌ Session failed: ${errorMsg}`);

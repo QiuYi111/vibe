@@ -1,6 +1,6 @@
 /**
  * Child process execution utilities
- * 
+ *
  * CRITICAL: Uses execa to prevent process deadlocks that plagued the Bash version.
  * Key protections: timeout, maxBuffer, stdin closure, CI env variables.
  */
@@ -10,7 +10,7 @@ import { ExecResult } from '../types.js';
 
 /**
  * Execute a command and return the result
- * 
+ *
  * @param cmd - Command to execute
  * @param args - Command arguments
  * @param options - Execution options (cwd, env, input, timeout)
@@ -30,12 +30,12 @@ export async function execCmd(
         const result = await execa(cmd, args, {
             cwd: options?.cwd || process.cwd(),
             env: { ...process.env, ...options?.env },
-            input: options?.input || '',  // 🔑 Critical: explicitly close stdin to prevent hanging
-            timeout: options?.timeout || 300000,  // 🔑 Default 5 minutes timeout
-            maxBuffer: 10 * 1024 * 1024,  // 🔑 10MB buffer limit to prevent overflow
-            cleanup: true,  // 🔑 Automatically kill child processes on exit
+            input: options?.input || '', // 🔑 Critical: explicitly close stdin to prevent hanging
+            timeout: options?.timeout || 300000, // 🔑 Default 5 minutes timeout
+            maxBuffer: 10 * 1024 * 1024, // 🔑 10MB buffer limit to prevent overflow
+            cleanup: true, // 🔑 Automatically kill child processes on exit
             shell: false,
-            reject: false,  // Don't throw on non-zero exit, return result instead
+            reject: false, // Don't throw on non-zero exit, return result instead
         });
 
         return {
@@ -56,9 +56,9 @@ export async function execCmd(
 
 /**
  * Run Claude CLI with a prompt
- * 
+ *
  * CRITICAL FIX: Forces non-interactive mode to prevent TTY detection deadlocks
- * 
+ *
  * @param prompt - The prompt to send to Claude
  * @param options - Execution options (cwd, context, timeout)
  * @returns ExecResult with Claude's response
@@ -69,25 +69,21 @@ export async function runClaude(
 ): Promise<ExecResult> {
     return execCmd('claude', ['--dangerously-skip-permissions', '-p', prompt], {
         cwd: options?.cwd,
-        input: options?.context || '',  // 🔑 Empty string closes stdin
-        timeout: options?.timeout || 5 * 60 * 1000,  // 🔑 5 minute default for LLM calls
+        input: options?.context || '', // 🔑 Empty string closes stdin
+        timeout: options?.timeout || 5 * 60 * 1000, // 🔑 5 minute default for LLM calls
         env: {
-            CI: 'true',  // 🔑 Force non-interactive mode
-            NO_COLOR: '1',  // 🔑 Disable ANSI colors for clean parsing
-        }
+            CI: 'true', // 🔑 Force non-interactive mode
+            NO_COLOR: '1', // 🔑 Disable ANSI colors for clean parsing
+        },
     });
 }
 
 /**
  * Run git command
  */
-export async function runGit(
-    args: string[],
-    options?: { cwd?: string }
-): Promise<ExecResult> {
+export async function runGit(args: string[], options?: { cwd?: string }): Promise<ExecResult> {
     return execCmd('git', args, options);
 }
-
 
 /**
  * Check if a command exists in PATH
@@ -98,14 +94,23 @@ export async function commandExists(cmd: string): Promise<boolean> {
 }
 
 /**
- * Execute with retry and rate limit handling
+ * Execute with retry and exponential backoff
+ *
+ * Implements exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 60s (max)
+ * Special handling for rate limiting (429 errors): 60s wait
+ *
+ * @param fn - Async function to retry
+ * @param maxRetries - Maximum number of retry attempts (default: 3)
+ * @param initialDelayMs - Initial delay in milliseconds (default: 1000)
+ * @returns Result of fn()
  */
 export async function execWithRetry<T>(
     fn: () => Promise<T>,
     maxRetries: number = 3,
-    delayMs: number = 1000
+    initialDelayMs: number = 1000
 ): Promise<T> {
     let retryCount = 0;
+    const maxDelay = 60000; // 60 seconds maximum
 
     while (retryCount < maxRetries) {
         try {
@@ -119,12 +124,18 @@ export async function execWithRetry<T>(
 
             // Check for rate limiting
             const errorMsg = error instanceof Error ? error.message : String(error);
+            let delayMs: number;
+
             if (errorMsg.includes('429') || errorMsg.toLowerCase().includes('rate limit')) {
-                console.warn(`⚠️ Rate limit detected, waiting 60s...`);
-                await new Promise(resolve => setTimeout(resolve, 60000));
+                console.warn(`⚠️ Rate limit detected, waiting 60s... (attempt ${retryCount}/${maxRetries})`);
+                delayMs = 60000; // Fixed 60s for rate limits
             } else {
-                await new Promise(resolve => setTimeout(resolve, delayMs));
+                // Exponential backoff: delay = initialDelay * 2^(retryCount - 1)
+                delayMs = Math.min(initialDelayMs * Math.pow(2, retryCount - 1), maxDelay);
+                console.warn(`⚠️ Retry ${retryCount}/${maxRetries} after ${delayMs}ms: ${errorMsg}`);
             }
+
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
     }
 
