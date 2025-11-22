@@ -4,44 +4,56 @@
 
 ---
 
-## 主要功能
+## 📦 一键安装
 
-- **并行Git工作树**：每个代理在独立分支中工作
-- **多代理协作**：架构师 → 工厂(并行代理) → 代码审查 → 合并
-- **自动修复**：根据审查反馈自动重试
-- **生产级可靠性**：超时保护、数据验证、优雅退出
-- **SuperClaude集成**：使用 `/sc:index-repo`、`/sc:workflow`、`/sc:implement` 命令
+```bash
+curl -fsSL https://raw.githubusercontent.com/QiuYi111/vibe/main/install.sh | bash
+```
 
----
-
-## 快速开始
-
-### 安装
+或手动安装：
 
 ```bash
 npm install -g @jingyi_qiu/vibe-flow
 ```
 
-### 系统要求
+## ✨ 主要功能
 
-Vibe Flow需要以下系统依赖：
+- **并行Git工作树**：每个代理在独立分支中工作，互不干扰
+- **多代理协作**：架构师规划 → 工厂执行 → 代码审查 → 自动合并
+- **自动修复**：根据审查反馈自动重试，无需人工干预
+- **生产级可靠性**：超时保护、数据验证、优雅退出
+- **交互式调试**：基于tmux的任务监控和实时介入
+- **SuperClaude集成**：使用 `/sc:index-repo`、`/sc:workflow`、`/sc:implement` 命令
 
-- **Node.js** 18+
-- **Git** (支持工作树功能)
-- **Claude CLI** (用于SuperClaude命令)
-- **jq** - JSON处理工具
-- **python3** - 工具脚本
+## 🚀 快速使用
 
-### 使用方法
-
+### 1. 安装依赖
 ```bash
-# 进入你的项目目录
+# 系统会自动检测并安装：
+# - Node.js 18+
+# - Claude CLI
+# - SuperClaude
+# - jq (JSON工具)
+# - tmux (可选，用于任务监控)
+```
+
+### 2. 配置认证
+```bash
+claude  # 配置Claude认证
+```
+
+### 3. 开始使用
+```bash
+# 进入你的项目
 cd your-project
 
-# 运行vibe flow
+# 创建需求文件
+echo "实现用户登录功能" > REQUIREMENTS.md
+
+# 运行自动化开发
 vibe
 
-# 自定义配置
+# 高级配置
 MAX_PARALLEL_AGENTS=4 MAX_RETRIES=5 vibe
 ```
 
