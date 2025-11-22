@@ -11,7 +11,6 @@
 import { spawn, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { log } from '../logger.js';
 
 export interface TmuxTaskOptions {
     taskId: string;
@@ -43,7 +42,7 @@ export class TmuxTaskRunner {
      * 在tmux会话中运行Claude任务
      */
     static async runClaudeInTmux(options: TmuxTaskOptions): Promise<string | null> {
-        const { taskId, prompt, cwd, needsOutput = false, outputFormat = 'text', timeout = 30 * 60 * 1000 } = options;
+        const { taskId, prompt, cwd, needsOutput = false, outputFormat = 'text', timeout = 0 } = options;
 
         const sessionId = `${this.SESSION_PREFIX}-${taskId}`;
         const promptFile = path.join(cwd, `.vibe_prompt_${taskId}.txt`);
@@ -59,7 +58,7 @@ export class TmuxTaskRunner {
             // 3. 显示介入指南
             this.showInterventionGuide(sessionId, taskId);
 
-            // 4. 等待任务完成
+            // 4. 等待任务完成 (timeout=0表示无限等待)
             await this.waitForSessionCompletion(sessionId, timeout);
 
             // 5. 读取结果
@@ -149,15 +148,11 @@ export class TmuxTaskRunner {
     }
 
     /**
-     * 显示介入指南
+     * 显示介入指南 (内部使用，详细信息在factory中显示)
      */
     private static showInterventionGuide(sessionId: string, taskId: string): void {
-        console.log(``);
-        log.cyan(`🎬 [Tmux] Task ${taskId} started in background session`);
-        log.success(`📺 To watch: tmux attach -t ${sessionId}`);
-        log.success(`🔧 To intervene: tmux attach -t ${sessionId} (then use Ctrl+B D to detach)`);
-        log.info(`📋 Session list: tmux ls`);
-        console.log(``);
+        // 简化为内部日志，详细信息在factory.ts中显示给用户
+        console.log(`📺 Tmux session ${sessionId} created for task ${taskId}`);
     }
 
     /**
@@ -172,8 +167,8 @@ export class TmuxTaskRunner {
                     // has-session返回0表示存在，非0表示不存在（已结束）
                     execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
 
-                    // 检查超时
-                    if (Date.now() - startTime > timeout) {
+                    // 检查超时 (timeout=0表示无超时限制)
+                    if (timeout > 0 && Date.now() - startTime > timeout) {
                         clearInterval(checkInterval);
                         reject(new Error(`Tmux session timeout after ${timeout/1000}s`));
                         return;

@@ -436,12 +436,33 @@ EOM
 # --- 🔍 依赖检查 ---
 function check_deps() {
     local deps=("claude" "jq" "git" "node" "npx" "python3")
+    local optionalDeps=("tmux")
+
+    # 检查关键依赖
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             echo -e "${RED}❌ Critical Error: Missing dependency '$cmd'. Please install it.${NC}"
             exit 1
         fi
     done
+
+    # 检查可选依赖
+    local missingOptional=()
+    for cmd in "${optionalDeps[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missingOptional+=("$cmd")
+        fi
+    done
+
+    # 警告缺少的可选依赖
+    if [ ${#missingOptional[@]} -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  Warning: Missing optional dependencies: ${missingOptional[*]}${NC}"
+        echo -e "${BLUE}   These are not required, but some features may be unavailable:${NC}"
+        echo -e "${BLUE}   - tmux: Enables interactive task debugging and intervention${NC}"
+        echo -e "${BLUE}   Install with: brew install tmux (macOS) or apt-get install tmux (Ubuntu)${NC}"
+        echo ""
+    fi
+
     mkdir -p "$LOG_DIR"
 }
 

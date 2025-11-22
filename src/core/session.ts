@@ -63,18 +63,37 @@ export async function runSession(config: VibeConfig): Promise<void> {
         // 6. Run Architect
         const taskPlan = await runArchitect(session, config);
 
-        // 7. Run Factory (parallel task execution)
-        log.info(`⚡ Launching ${taskPlan.length} tasks with worktrees (Max Parallel: ${config.maxParallelAgents})...`);
+        // 7. 显示任务执行前的状态信息
+        console.log(``);
+        log.info(`🌿 Ensuring vibe branch...`);
+        log.info(`📍 Session starting at commit: ${startHash}`);
+        log.info(`📚 [Librarian] Analyzing context...`);
+        console.log(``);
+        console.log(`✅ Plan generated: ${taskPlan.length} tasks.`);
+        console.log(``);
+
+        // 8. Run Factory (parallel task execution) - 这会启动表格TUI
+        log.info(`🏗️  Creating ${taskPlan.length} worktrees (serial)...`);
         await runTasksInBatches(taskPlan, session, config);
 
-        // 8. Cleanup worktrees
+        // 9. Cleanup worktrees
         log.info('🧹 Cleaning up worktrees...');
         for (const task of session.tasks) {
             await cleanupTaskWorktree(task.id);
         }
 
         // 9. Merge all task branches
+        const { ProgressMonitor } = await import('../utils/progressMonitor.js');
+        const monitor = ProgressMonitor.getGlobalInstance();
+        if (monitor) {
+            monitor.setMergeStatus('merging');
+        }
+
         await runMergeManager(session.tasks, config);
+
+        if (monitor) {
+            monitor.setMergeStatus('completed');
+        }
 
         // 10. Integration Phase
         console.log('');
@@ -88,7 +107,15 @@ export async function runSession(config: VibeConfig): Promise<void> {
         }
 
         // 11. CTO Review
+        if (monitor) {
+            monitor.setReviewStatus('reviewing');
+        }
+
         await runCtoReview(startHash);
+
+        if (monitor) {
+            monitor.setReviewStatus('completed');
+        }
 
         // 12. Session Report
         await generateSessionReport(session, config);

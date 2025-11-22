@@ -30,32 +30,18 @@ export async function execCmd(
     const timeout = options?.timeout || 300000; // 5 minutes default
     let progressInterval: NodeJS.Timeout | null = null;
 
-    // Setup soft timeout monitoring for Claude commands
-    if (isClaude && timeout > 60000) { // Only for timeouts > 1 minute
-        const softTimeout = Math.floor(timeout * 0.8); // 80% of timeout for first warning
+    // 🔑 简化的Claude进度监控 - 只提醒，不中断
+    if (isClaude) {
         const startTime = Date.now();
 
-        setTimeout(() => {
-            const remaining = Math.floor((timeout - (Date.now() - startTime)) / 1000);
-            console.log(`\n🤔 [Claude] Still thinking... (${remaining}s timeout remaining)`);
-            console.log('💡 Press Ctrl+C to enter debug mode if needed\n');
-
-            // Show periodic progress updates every 30 seconds
-            progressInterval = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                const remaining = Math.max(0, Math.floor((timeout - (Date.now() - startTime)) / 1000));
-                console.log(`⏳ [Claude] Still working... (${elapsed}s elapsed, ${remaining}s remaining)`);
-            }, 30000);
-        }, softTimeout);
-
-        // Hard timeout reminder
-        setTimeout(() => {
-            if (progressInterval) {
-                clearInterval(progressInterval);
-            }
-            console.log('\n⚠️ [Claude] Expected timeout reached, but allowing to continue...');
-            console.log('🔧 Use Ctrl+C to interrupt if needed\n');
-        }, timeout);
+        // 每2分钟提醒一次Claude还在工作
+        progressInterval = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            console.log(`🤔 [Claude] Still working... (${minutes}m ${seconds}s elapsed)`);
+            console.log(`💡 To monitor progress: tmux attach -t vibe-task-TASK_ID`);
+        }, 120000); // 2分钟间隔
     }
 
     try {
@@ -86,19 +72,8 @@ export async function execCmd(
             clearInterval(progressInterval);
         }
 
-        // Handle timeout and other errors
+        // 简化错误处理 - 不再特殊处理Claude超时
         const execaError = error as ExecaError;
-
-        // For Claude timeouts, don't treat as error - just return what we have
-        if (isClaude && execaError.timedOut) {
-            console.log('\n⚠️ [Claude] Taking longer than expected, but allowing to continue...\n');
-            return {
-                stdout: typeof execaError.stdout === 'string' ? execaError.stdout : '',
-                stderr: typeof execaError.stderr === 'string' ? execaError.stderr : 'Command timed out but continuing...',
-                code: 0, // Treat as success since we're allowing it to continue
-            };
-        }
-
         return {
             stdout: typeof execaError.stdout === 'string' ? execaError.stdout : '',
             stderr: typeof execaError.stderr === 'string' ? execaError.stderr : execaError.message,

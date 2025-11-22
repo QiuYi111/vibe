@@ -3,7 +3,7 @@
  */
 
 import { TaskState, SessionState, VibeConfig, TaskPlanItem, TaskStatus } from '../types.js';
-import { runClaude, execCmd, execWithRetry } from '../utils/childProcess.js';
+import { execCmd, execWithRetry } from '../utils/childProcess.js';
 import { runReviewAgent } from './review.js';
 import { TmuxTaskRunner } from './tmuxTaskRunner.js';
 import { log } from '../logger.js';
@@ -58,30 +58,21 @@ export async function runTasksInBatches(
         tasks.map(t => t.name)
     );
 
-    // Setup interactive task manager for debugging stuck tasks
-    const { InteractiveTaskManager } = await import('./interactiveTaskManager.js');
-    const taskManager = new InteractiveTaskManager(tasks, session, config);
-
-    try {
-        // Execute all tasks with concurrency limit and progress monitoring
-        await Promise.all(
-            tasks.map((task) =>
-                limit(async () => {
-                    try {
-                        monitor.update(task.id, 'RUNNING');
-                        await runSingleTaskWithWorktree(task, session, config, taskManager);
-                        monitor.update(task.id, 'COMPLETED');
-                    } catch {
-                        monitor.update(task.id, 'FAILED');
-                        task.status = 'FAILED';
-                    }
-                })
-            )
-        );
-    } finally {
-        // Cleanup interactive manager
-        taskManager.cleanup();
-    }
+    // Execute all tasks with concurrency limit and progress monitoring
+    await Promise.all(
+        tasks.map((task) =>
+            limit(async () => {
+                try {
+                    monitor.update(task.id, 'RUNNING');
+                    await runSingleTaskWithWorktree(task, session, config);
+                    monitor.update(task.id, 'COMPLETED');
+                } catch {
+                    monitor.update(task.id, 'FAILED');
+                    task.status = 'FAILED';
+                }
+            })
+        )
+    );
 
     monitor.stop();
 
@@ -90,20 +81,6 @@ export async function runTasksInBatches(
     );
 }
 
-/**
- * Determine if a task should use Tmux mode
- */
-function shouldUseTmux(task: TaskState): boolean {
-    // 对于代码修改任务，使用Tmux模式以便介入
-    // 对于规划/分析任务，使用直接模式以获取输出
-    const codingTasks = [
-        'implement', 'develop', 'code', 'programming',
-        'feature', 'bug', 'fix', 'refactor'
-    ];
-
-    const taskDesc = task.desc.toLowerCase();
-    return codingTasks.some(keyword => taskDesc.includes(keyword));
-}
 
 /**
  * Run a single task in pre-created worktree
@@ -112,8 +89,7 @@ function shouldUseTmux(task: TaskState): boolean {
 async function runSingleTaskWithWorktree(
     task: TaskState,
     session: SessionState,
-    config: VibeConfig,
-    taskManager?: any
+    config: VibeConfig
 ): Promise<void> {
     log.cyan(`🚀 [Agent] ${task.name} (Branch: ${task.branchName})`);
 
@@ -121,13 +97,7 @@ async function runSingleTaskWithWorktree(
         task.status = 'RUNNING';
         task.startTime = Date.now(); // Track start time for debug mode
 
-        // Get session ID from task manager
-        const sessionId = taskManager?.getTaskSessionId?.(task.id);
-        if (sessionId) {
-            log.task(task.id, `>>> Agent working in ${task.worktreePath} (Session: ${sessionId})...`, config.logDir);
-        } else {
-            log.task(task.id, `>>> Agent working in ${task.worktreePath}...`, config.logDir);
-        }
+        log.task(task.id, `>>> Agent working in ${task.worktreePath}...`, config.logDir);
 
         // Initial build prompt
         const buildPrompt = `/sc:implement
@@ -163,34 +133,25 @@ ${reviewFeedback}
 Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${task.name} - Fix attempt ${task.attempts + 1}'
 `;
 
-                // Choose execution mode based on Tmux availability and task type
-                const useTmux = await TmuxTaskRunner.isTmuxAvailable() && shouldUseTmux(task);
+                // 🔑 一刀切：所有任务都用Tmux模式
+                const sessionId = `vibe-task-${task.id}`;
+                console.log(``);
+                log.cyan(`🎬 [Tmux] Task ${task.name} started in background session`);
+                log.success(`📺 To watch: tmux attach -t ${sessionId}`);
+                log.success(`🔧 To intervene: tmux attach -t ${sessionId} (then use Ctrl+B D to detach)`);
+                log.info(`📋 Or use: node dist/cli/tmux-cli.js attach ${task.id}`);
+                console.log(``);
 
-                if (useTmux) {
-                    // 使用Tmux模式运行
-                    log.task(task.id, ">>> Using Tmux interactive mode...", config.logDir);
+                await TmuxTaskRunner.runClaudeInTmux({
+                    taskId: task.id,
+                    prompt: prompt,
+                    cwd: task.worktreePath,
+                    needsOutput: true, // 需要获取Claude的输出结果
+                    outputFormat: 'json', // 使用JSON格式获取结构化结果
+                    timeout: 0 // 无超时限制，让Claude自然完成
+                });
 
-                    await TmuxTaskRunner.runClaudeInTmux({
-                        taskId: task.id,
-                        prompt: prompt,
-                        cwd: task.worktreePath,
-                        needsOutput: false, // 对于代码修改任务，不需要返回值
-                        timeout: 30 * 60 * 1000 // 30分钟超时
-                    });
-
-                    log.task(task.id, ">>> Tmux session completed", config.logDir);
-                } else {
-                    // 使用原有的直接调用模式
-                    log.task(task.id, ">>> Using direct execution mode...", config.logDir);
-
-                    const claudeResult = await runClaude(prompt, {
-                        cwd: task.worktreePath,
-                        sessionId: sessionId
-                    });
-
-                    log.task(task.id, claudeResult.stdout, config.logDir);
-                    log.task(task.id, claudeResult.stderr, config.logDir);
-                }
+                log.task(task.id, ">>> Tmux session completed", config.logDir);
 
                 // Check if agent committed
                 const logResult = await execCmd('git', ['log', '--oneline', '-1'], { cwd: task.worktreePath });
@@ -213,9 +174,18 @@ Fix the issues identified in the review. Then commit: git commit -am 'Agent: ${t
                     throw new Error(`Review failed, attempt ${task.attempts}`);
                 }
 
-                // Success
+                // Success - 标记任务完全完成
                 task.status = task.attempts > 0 ? 'HEALED' : 'SUCCEEDED';
                 task.endTime = Date.now(); // Track end time
+
+                // 🎯 更新TUI显示任务完全完成
+                if (config.logDir) {
+                    const { ProgressMonitor } = await import('../utils/progressMonitor.js');
+                    // 创建临时monitor实例来调用completeTask
+                    const monitor = new (ProgressMonitor as any)(config.logDir);
+                    monitor.completeTask(task.id);
+                }
+
                 return;
             },
             config.maxRetries,

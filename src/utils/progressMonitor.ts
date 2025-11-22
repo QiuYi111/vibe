@@ -1,16 +1,18 @@
 /**
- * Progress Monitor: Enhanced live progress monitoring for parallel tasks
- * 
- * Improves on bash's basic spinner with:
- * - Multi-line task status display
- * - Elapsed time tracking
- * - Latest log activity per task
- * - Colorized status indicators
+ * Progress Monitor: Table-based TUI for task monitoring
+ *
+ * Features:
+ * - Clean table interface with task status
+ * - Real-time updates with tmux session information
+ * - Progress tracking and elapsed time
+ * - Merge and review phase status
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import { TableTUI } from './tableTUI.js';
 import { log } from '../logger.js';
+
+// 全局ProgressMonitor实例，供session.ts访问
+let globalMonitor: ProgressMonitor | null = null;
 
 export type TaskProgress = {
     id: string;
@@ -22,200 +24,110 @@ export type TaskProgress = {
 };
 
 export class ProgressMonitor {
-    private tasks: Map<string, TaskProgress> = new Map();
+    private tableTUI: TableTUI;
+    private taskIds: string[] = [];
     private startTime: number = 0;
-    private logDir: string;
-    private renderedLines: number = 0;
 
-    constructor(logDir: string) {
-        this.logDir = logDir;
+    constructor(_logDir: string) {
+        // TableTUI不需要logDir，但保留参数以兼容现有接口
+        this.tableTUI = new TableTUI([], []);
     }
 
     /**
      * Start monitoring tasks
      */
     start(taskIds: string[], taskNames: string[]): void {
+        this.taskIds = taskIds;
         this.startTime = Date.now();
 
-        // Initialize task states
-        taskIds.forEach((id, index) => {
-            this.tasks.set(id, {
-                id,
-                name: taskNames[index] || id,
-                status: 'PENDING',
-            });
-        });
+        // 创建新的TableTUI实例
+        this.tableTUI = new TableTUI(taskIds, taskNames);
+        this.tableTUI.start();
 
-        // Initial render
-        this.renderUI();
+        // 设置全局实例
+        globalMonitor = this;
+    }
+
+    /**
+     * 获取全局ProgressMonitor实例
+     */
+    static getGlobalInstance(): ProgressMonitor | null {
+        return globalMonitor;
     }
 
     /**
      * Update task status
      */
     update(taskId: string, status: TaskProgress['status'], activity?: string): void {
-        const task = this.tasks.get(taskId);
-        if (!task) return;
+        const sessionId = status === 'RUNNING' ? `vibe-task-${taskId}` : undefined;
 
-        const now = Date.now();
-
-        if (status === 'RUNNING' && !task.startTime) {
-            task.startTime = now;
+        // 转换状态到TableTUI格式
+        let tableStatus: 'waiting' | 'running' | 'completed' | 'failed' | 'reviewing';
+        switch (status) {
+            case 'PENDING':
+                tableStatus = 'waiting';
+                break;
+            case 'RUNNING':
+                tableStatus = 'running';
+                break;
+            case 'COMPLETED':
+                tableStatus = 'reviewing';
+                break;
+            case 'FAILED':
+                tableStatus = 'failed';
+                break;
         }
 
-        if ((status === 'COMPLETED' || status === 'FAILED') && !task.endTime) {
-            task.endTime = now;
-        }
-
-        task.status = status;
-        if (activity) {
-            task.latestActivity = activity;
-        }
-
-        this.renderUI();
+        this.tableTUI.update(taskId, tableStatus, sessionId, activity);
     }
 
     /**
      * Stop monitoring and show final summary
      */
     stop(): void {
-        // Clear the static UI one last time to print the summary cleanly below it
-        // Or just leave it there and print summary below.
-        // Let's leave it and print summary below.
-        this.renderUI();
+        this.tableTUI.stop();
         this.printSummary();
     }
 
     /**
-     * Render the monitoring UI
+     * 标记任务完全完成（包括review）
      */
-    private renderUI(): void {
-        // Move cursor up to overwrite previous output
-        if (this.renderedLines > 0) {
-            process.stdout.write(`\x1b[${this.renderedLines}A`);
-        }
+    completeTask(taskId: string): void {
+        this.tableTUI.completeTask(taskId);
+    }
 
-        const lines: string[] = [];
+    /**
+     * 设置merge状态
+     */
+    setMergeStatus(status: 'waiting' | 'merging' | 'completed'): void {
+        this.tableTUI.setMergeStatus(status);
+    }
 
-        const running = Array.from(this.tasks.values()).filter(t => t.status === 'RUNNING').length;
-        const completed = Array.from(this.tasks.values()).filter(t => t.status === 'COMPLETED').length;
-        const failed = Array.from(this.tasks.values()).filter(t => t.status === 'FAILED').length;
-        const total = this.tasks.size;
-
-        const elapsed = this.formatElapsedTime(Date.now() - this.startTime);
-
-        // Header
-        const header = `⚡ Progress: ${completed + failed}/${total} (Running: ${running}, Failed: ${failed}) | Elapsed: ${elapsed}`;
-        lines.push(`\x1b[K${log.colors.BLUE}${header}${log.colors.RESET}`);
-
-        // Task list
-        for (const task of this.tasks.values()) {
-            const statusIcon = this.getStatusIcon(task.status);
-            const statusColor = this.getStatusColor(task.status);
-            const duration = this.getTaskDuration(task);
-
-            let line = `  ${statusColor}${statusIcon} ${task.name}${log.colors.RESET}`;
-
-            // Add duration for completed/failed tasks
-            if (duration) {
-                line += ` ${log.colors.CYAN}(${duration})${log.colors.RESET}`;
-            }
-
-            // Add latest activity if available
-            if (task.status === 'RUNNING' && task.latestActivity) {
-                const activity = task.latestActivity.substring(0, 40);
-                line += ` ${log.colors.DIM}${activity}...${log.colors.RESET}`;
-            } else if (task.status === 'PENDING') {
-                line += ` ${log.colors.DIM}(waiting)${log.colors.RESET}`;
-            }
-
-            lines.push(`\x1b[K${line}`);
-        }
-
-        // Print all lines
-        console.log(lines.join('\n'));
-        this.renderedLines = lines.length;
+    /**
+     * 设置review状态
+     */
+    setReviewStatus(status: 'waiting' | 'reviewing' | 'completed'): void {
+        this.tableTUI.setReviewStatus(status);
     }
 
     /**
      * Print final summary
      */
     private printSummary(): void {
-        const completed = Array.from(this.tasks.values()).filter(t => t.status === 'COMPLETED').length;
-        const failed = Array.from(this.tasks.values()).filter(t => t.status === 'FAILED').length;
-        const total = this.tasks.size;
+        const completed = this.taskIds.length;
+        const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
 
         console.log(''); // Add spacing
-        if (failed > 0) {
-            log.error(`❌ Completed with failures: ${completed} succeeded, ${failed} failed out of ${total}`);
-        } else {
-            log.success(`✅ All tasks completed: ${completed}/${total}`);
-        }
+        log.success(`✅ All tasks completed: ${completed}/${completed} in ${minutes}m ${seconds}s`);
     }
 
     /**
-     * Get status icon
+     * 保持兼容性方法（现在由TableTUI内部处理）
      */
-    private getStatusIcon(status: TaskProgress['status']): string {
-        switch (status) {
-            case 'PENDING': return '⏳';
-            case 'RUNNING': return '⚙️';
-            case 'COMPLETED': return '✅';
-            case 'FAILED': return '❌';
-        }
-    }
-
-    /**
-     * Get status color
-     */
-    private getStatusColor(status: TaskProgress['status']): string {
-        switch (status) {
-            case 'PENDING': return log.colors.YELLOW;
-            case 'RUNNING': return log.colors.CYAN;
-            case 'COMPLETED': return log.colors.GREEN;
-            case 'FAILED': return log.colors.RED;
-        }
-    }
-
-    /**
-     * Get task duration
-     */
-    private getTaskDuration(task: TaskProgress): string | null {
-        if (!task.startTime) return null;
-
-        const end = task.endTime || Date.now();
-        const duration = end - task.startTime;
-        return this.formatElapsedTime(duration);
-    }
-
-    /**
-     * Format elapsed time
-     */
-    private formatElapsedTime(ms: number): string {
-        const seconds = Math.floor(ms / 1000);
-        if (seconds < 60) return `${seconds}s`;
-
-        const minutes = Math.floor(seconds / 60);
-        const remainingSeconds = seconds % 60;
-        return `${minutes}m ${remainingSeconds}s`;
-    }
-
-    /**
-     * Read latest log activity for a task
-     */
-    async readLatestActivity(taskId: string): Promise<string | undefined> {
-        const logFile = path.join(this.logDir, `${taskId}.log`);
-
-        try {
-            if (fs.existsSync(logFile)) {
-                const content = fs.readFileSync(logFile, 'utf-8');
-                const lines = content.split('\n').filter(l => l.trim());
-                return lines[lines.length - 1];
-            }
-        } catch {
-            // Ignore errors reading log files
-        }
-
+    async readLatestActivity(_taskId: string): Promise<string | undefined> {
+        // TableTUI内部已经处理了活动更新，这里返回undefined以保持兼容
         return undefined;
     }
 }

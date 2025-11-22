@@ -63,12 +63,31 @@ function showHelp(): void {
  */
 async function checkDependencies(): Promise<void> {
     const deps = ['claude', 'jq', 'git', 'node', 'npx', 'python3'];
+    const optionalDeps = ['tmux']; // Tmux is optional but recommended
 
+    // Check critical dependencies
     for (const cmd of deps) {
         if (!(await commandExists(cmd))) {
             log.error(`❌ Critical Error: Missing dependency '${cmd}'. Please install it.`);
             process.exit(1);
         }
+    }
+
+    // Check optional dependencies
+    const missingOptional = [];
+    for (const cmd of optionalDeps) {
+        if (!(await commandExists(cmd))) {
+            missingOptional.push(cmd);
+        }
+    }
+
+    // Warn about missing optional dependencies
+    if (missingOptional.length > 0) {
+        log.warn(`⚠️  Warning: Missing optional dependencies: ${missingOptional.join(', ')}`);
+        log.info('   These are not required, but some features may be unavailable:');
+        log.info('   - tmux: Enables interactive task debugging and intervention');
+        log.info('   Install with: brew install tmux (macOS) or apt-get install tmux (Ubuntu)');
+        console.log('');
     }
 }
 

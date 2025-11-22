@@ -15,7 +15,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\"",
+    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\nOptional but recommended: tmux (for interactive debugging)\n\nInstall tmux:\n  macOS: brew install tmux\n  Ubuntu: apt-get install tmux\n  CentOS: yum install tmux\"",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
