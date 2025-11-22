@@ -122,11 +122,23 @@ export async function runGit(args: string[], options?: { cwd?: string }): Promis
 }
 
 /**
- * Check if a command exists in PATH
+ * Check if a command exists in PATH (cross-platform)
  */
 export async function commandExists(cmd: string): Promise<boolean> {
-    const result = await execCmd('command', ['-v', cmd]);
-    return result.code === 0;
+    try {
+        if (process.platform === 'win32') {
+            // Windows: use 'where' command
+            const result = await execCmd('where', [cmd]);
+            return result.code === 0;
+        } else {
+            // Unix/Linux/macOS: use 'command -v'
+            const result = await execCmd('command', ['-v', cmd]);
+            return result.code === 0;
+        }
+    } catch {
+        // If command fails, assume command doesn't exist
+        return false;
+    }
 }
 
 /**
