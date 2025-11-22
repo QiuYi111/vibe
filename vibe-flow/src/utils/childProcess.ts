@@ -17,7 +17,7 @@ export async function execCmd(
         const proc = spawn(cmd, args, {
             cwd: options?.cwd || process.cwd(),
             env: { ...process.env, ...options?.env },
-            shell: true,
+            shell: false,
         });
 
         let stdout = '';
