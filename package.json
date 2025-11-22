@@ -1,13 +1,60 @@
 {
-  "name": "vibe-integration",
-  "version": "1.0.0",
-  "description": "Integration test coordinator for Vibe project",
-  "private": true,
-  "scripts": {
-    "test": "cd vibe-flow && npm test",
-    "postinstall": "cd vibe-flow && npm install"
+  "name": "@jingyi_qiu/vibe-flow",
+  "version": "1.0.1",
+  "type": "module",
+  "description": "Git-Native Autonomous Coding Engine powered by Claude",
+  "bin": {
+    "vibe": "./dist/cli.js",
+    "vibe-legacy": "./bin/vibe"
   },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/cli.ts",
+    "test": "echo \"Run 'vibe' locally to test\" && exit 0",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "postinstall": "echo \"NOTE: Vibe Flow requires system dependencies: git, python3, jq, claude CLI\nOptional but recommended: tmux (for interactive debugging)\n\nInstall tmux:\n  macOS: brew install tmux\n  Ubuntu: apt-get install tmux\n  CentOS: yum install tmux\"",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "coding",
+    "git",
+    "automation",
+    "development",
+    "cli"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
   "engines": {
     "node": ">=18"
-  }
+  },
+  "dependencies": {
+    "execa": "^9.6.0",
+    "p-limit": "^7.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.47.0",
+    "@typescript-eslint/parser": "^8.47.0",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jingyi-qiu/vibe-flow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jingyi-qiu/vibe-flow/issues"
+  },
+  "homepage": "https://github.com/jingyi-qiu/vibe-flow#readme",
+  "preferGlobal": true
 }

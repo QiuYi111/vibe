@@ -1,29 +1,21 @@
-# Vibe Flow artifacts
-.vibe_logs/
-.vibe_worktrees/
-raw_context.xml
-project_index.xml
-vibe_plan.json
-vibe_report.md
-vibe_cto_report.md
-git_status.txt
-raw_plan_output.txt
-raw_plan.json
-REVIEW_REPORT.md
-
 # Dependencies
 node_modules/
-venv/
-.venv/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.egg-info/
+.Python
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Build outputs
 dist/
 build/
+*.egg-info/
 
 # Environment
 .env
@@ -31,6 +23,19 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Runtime Logs and Artifacts
+.vibe_logs/
+.vibe_worktrees/
+project_index.xml
+raw_context.xml
+raw_plan.json
+raw_plan_output.txt
+vibe_plan.json
+vibe_report.md
+vibe_cto_report.md
+git_status.txt
+REVIEW_REPORT.md
 
 # System
 .DS_Store
