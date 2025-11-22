@@ -40,6 +40,7 @@ export default [
                     varsIgnorePattern: '^_',
                 },
             ],
+            '@typescript-eslint/no-this-alias': 'off',
             'no-console': 'off',
             'no-unused-vars': 'off',
         },

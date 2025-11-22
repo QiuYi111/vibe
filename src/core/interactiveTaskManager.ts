@@ -97,6 +97,7 @@ export class InteractiveTaskManager {
                 case 'q':
                     console.log('👋 Aborting all tasks...');
                     process.exit(1);
+                    break;
                 default:
                     console.log('Unknown command. Type "help" for options.');
             }

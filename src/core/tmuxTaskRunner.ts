@@ -232,8 +232,13 @@ export class TmuxTaskRunner {
                 loadBuffer.on('error', reject);
             });
 
-            // Paste buffer and send Enter
+            // Paste buffer
             execSync(`tmux paste-buffer -t ${sessionId}`);
+
+            // Wait for paste to be processed by the terminal
+            await new Promise(r => setTimeout(r, 500));
+
+            // Send Enter to submit
             execSync(`tmux send-keys -t ${sessionId} Enter`);
 
         } catch (e) {

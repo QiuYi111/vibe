@@ -1,130 +1,111 @@
-# Vibe Flow v5.1 - 交互式任务调试系统更新
+# Vibe Flow v5.1 - 表格TUI与简化执行模型重构
 
 ## 📋 更新概述
 
-**版本**: v5.1
+**版本**: v5.1.1
 **日期**: 2025-11-22
-**类型**: 重大功能更新
-**更新主题**: 从"黑盒执行"到"完全可控"的交互式任务管理
+**类型**: 重大UI/UX重构 + 架构简化
+**更新主题**: 从"复杂智能"到"简洁粗暴"的优雅回归
 
 ## 🎯 更新背景
 
-### 原始问题
-用户在使用Vibe Flow时遇到了一个关键痛点：**当某个任务卡死时，用户完全无法介入**。具体表现为：
+### 初始问题
+v5.1.0实现了Tmux交互式调试，但暴露了更深层的设计问题：
 
-1. **黑盒执行** - Claude在后台静默运行，用户看不到实时思考过程或报错信息
-2. **无法介入** - 当Claude卡在权限确认或死循环时，Node.js只能挂起或超时
-3. **信息缺失** - 用户无法判断是真的需要长时间思考还是已经卡死
-4. **强制重启** - 唯一的办法是Ctrl+C杀死整个进程，然后重新开始
+1. **复杂度过高** - 智能任务分类、双重调试模式、多层超时逻辑
+2. **用户体验混乱** - 不知道该用Ctrl+T还是tmux attach
+3. **维护成本** - 特殊情况太多，代码难以维护
+4. **信息分散** - 进度条、状态信息、会话管理分离
 
-### 真实场景
-```
-⚡ Progress: 1/5 (Running: 1, Failed: 0) | Elapsed: 5m 15s
-  ❌ 项目结构分析 (5m 15s)  # 卡在这里，用户完全无能为力
-```
+### 设计哲学转变
+基于Linus Torvalds的工程哲学：
+- **"好品味"** - 消除特殊情况，统一处理方式
+- **"实用主义"** - 解决真实问题，不追求理论完美
+- **"简洁执念"** - 代码应该简单直接，易于理解
 
 ## 💡 解决思路演进
 
-### 阶段1: 超时优化 (最初尝试)
-- **思路**: 减少超时时间，避免长时间等待
-- **问题**: Claude确实需要长时间思考，粗暴超时会中断正常工作
-- **结论**: 不能用时间限制来解决介入问题
+### 阶段1: v5.1.0 - 混合智能系统
+- **思路**: 根据任务类型智能选择Tmux vs Direct模式
+- **问题**: 复杂的分类逻辑，用户体验不统一
+- **代码**: 复杂的`shouldUseTmux()`函数，基于关键词猜测
 
-### 阶段2: 软超时提醒 (中间方案)
-- **思路**: 保留5分钟超时，但增加进度提示
-- **实现**: 80%时间时提醒用户，30秒定期更新进度
-- **价值**: 用户知情，但仍无法介入
-- **代码**: `childProcess.ts` 中的软超时机制
-
-### 阶段3: Session-ID调试模式 (第一个完整方案)
-- **核心思想**: 为每个Claude进程分配UUID，支持resume功能
-- **交互方式**: Ctrl+T触发调试菜单，选择agent进行交互
-- **技术实现**:
-  - 修改`runClaude()`支持`--session-id`参数
-  - 创建`InteractiveTaskManager`类
-  - 实现Ctrl+T键绑定处理
-- **优势**: 统一管理界面，支持选择特定agent
-- **局限**: 仍依赖Claude CLI的resume功能，交互性有限
-
-### 阶段4: Tmux容器方案 (实习生提出的突破性思路)
-- **核心思想**: 将Claude放入tmux后台会话，完全可交互
+### 阶段2: v5.1.1 - 一刀切简化 (当前版本)
+- **核心思想**: 删除所有复杂判断，统一使用Tmux模式
 - **技术突破**:
-  - 输入输出解耦：通过文件传递prompt和result
-  - 进程守候：轮询tmux session状态而非等待进程
-  - 实时介入：直接`tmux attach`进入交互界面
-- **工程价值**: 彻底解决了"黑盒"问题
+  - 删除`shouldUseTmux()`函数
+  - 删除`InteractiveTaskManager`Ctrl+T调试系统
+  - 删除复杂的超时处理逻辑
+  - 统一使用表格TUI显示所有信息
+- **工程价值**: 简洁性大幅提升，用户体验完全统一
 
 ## 🛠️ 最终实施方案
 
-### 混合式智能选择系统
-结合两种方案的优势，根据任务类型自动选择执行模式：
-
+### 表格TUI系统 (全新设计)
 ```typescript
-function shouldUseTmux(task: TaskState): boolean {
-    const codingTasks = ['implement', 'develop', 'code', 'programming', 'feature', 'bug', 'fix', 'refactor'];
-    const planningTasks = ['analyze', 'design', 'plan', 'research', 'structure'];
-
-    const taskDesc = task.desc.toLowerCase();
-    return codingTasks.some(keyword => taskDesc.includes(keyword));
-}
+// 统一的表格显示替代滚动进度条
+┌─────┬─────────────────────┬──────────────────────┬─────────────────┬─────────────────────┐
+│ ID  │ Task Name           │ Status               │ Tmux Session    │ Progress            │
+├─────┼─────────────────────┼──────────────────────┼─────────────────┼─────────────────────┤
+│ 1   │ HTML Core Structure │ ⠙ Running (2m 30s)  │ vibe-task-1     │ 🤔 Still working... │
+│ 2   │ CSS Theme Engine    │ ⏳ Waiting           │ -               │ -                   │
+└─────┴─────────────────────┴──────────────────────┴─────────────────┴─────────────────────┘
 ```
 
 ### 核心组件
 
-#### 1. TmuxTaskRunner (`src/core/tmuxTaskRunner.ts`)
-**职责**: 管理Tmux会话的生命周期
-- `runClaudeInTmux()` - 在tmux中执行Claude任务
-- `isTmuxAvailable()` - 检查tmux可用性
-- `getActiveSessions()` - 获取活跃会话列表
-- `showSessionStatus()` - 显示会话状态
+#### 1. TableTUI (`src/utils/tableTUI.ts`) - 🆕 全新组件
+**职责**: 统一的表格显示界面
+- 实时表格渲染和更新
+- 任务状态管理和进度显示
+- Tmux会话信息展示
+- Merge和Review状态集成
 
 **关键特性**:
-- 文件传递prompt，避免Shell转义地狱
-- 轮询session状态替代进程等待
-- 自动清理临时文件和会话
-- 支持输出格式控制(text/json)
+- 2秒轮询自动刷新
+- 清晰的状态图标系统 (⠙⏳✅❌🔍)
+- 无超时限制，只显示友好提醒
+- 统一的用户界面体验
 
-#### 2. Enhanced InteractiveTaskManager (`src/core/interactiveTaskManager.ts`)
-**职责**: Session-ID方案的调试管理
-- 支持Ctrl+T键绑定(避免Ctrl+C冲突)
-- 为每个任务分配UUID session-id
-- 多种debug模式(新会话/恢复现有/手动)
-- 实时状态监控和日志查看
+#### 2. Simplified TmuxTaskRunner (`src/core/tmuxTaskRunner.ts`)
+**职责**: 简化的Tmux会话管理
+- 一刀切Tmux模式执行
+- 无超时限制 (`timeout: 0`)
+- 文件传递prompt和结果
+- 自动资源清理
 
-#### 3. Smart Factory (`src/core/factory.ts`)
-**职责**: 智能任务执行调度
-- 自动选择执行模式(Tmux vs Direct)
-- 统一错误处理和重试机制
-- 集成进度监控和任务管理
+#### 3. Simplified Factory (`src/core/factory.ts`)
+**职责**: 统一的任务执行调度
+- 删除复杂分类逻辑
+- 所有任务使用Tmux模式
+- 简化的错误处理
+- 集成TableTUI状态更新
 
-#### 4. Tmux CLI Tool (`src/cli/tmux-cli.ts`)
-**职责**: 独立的Tmux会话管理工具
+#### 4. Enhanced ProgressMonitor (`src/utils/progressMonitor.ts`)
+**职责**: TableTUI的适配层
+- 保持现有API兼容性
+- 全局状态管理
+- Merge和Review状态同步
+
+#### 5. Tmux CLI Tool (`src/cli/tmux-cli.ts`)
+**职责**: Tmux会话管理工具
 ```bash
-node dist/cli-tmux.js ls          # 列出活跃会话
-node dist/cli-tmux.js attach task_1  # 附加到指定任务
-node dist/cli-tmux.js kill task_1     # 杀死指定会话
-node dist/cli-tmux.js check          # 检查状态
+node dist/cli/tmux-cli.js ls          # 列出活跃会话
+node dist/cli/tmux-cli.js attach task_1  # 附加到指定任务
+node dist/cli/tmux-cli.js kill task_1     # 杀死指定会话
+node dist/cli/tmux-cli.js check          # 检查状态
 ```
 
-### 增强功能
+### 简化的功能
 
-#### 软超时提醒系统 (`src/utils/childProcess.ts`)
-- 80%时间时首次提醒: `🤔 [Claude] Still thinking... (60s timeout remaining)`
-- 每30秒进度更新: `⏳ [Claude] Still working... (240s elapsed, 60s remaining)`
-- 超时后继续等待: `⚠️ [Claude] Expected timeout reached, but allowing to continue...`
-
-#### 类型系统增强 (`src/types.ts`)
-```typescript
-export interface TaskState {
-    // 原有字段...
-    startTime?: number;  // 任务开始时间
-    endTime?: number;    // 任务结束时间
-}
-```
+#### 友好提醒系统 (`src/utils/childProcess.ts`)
+- 每2分钟提醒: `🤔 [Claude] Still working... (2m 30s elapsed)`
+- tmux attach指导: `💡 To monitor progress: tmux attach -t vibe-task-TASK_ID`
+- 删除复杂超时中断，只保留提醒
 
 ## 🎯 用户体验提升
 
-### Before (v5.0)
+### Before (v5.0) - 滚动进度条
 ```bash
 $ node dist/cli.js
 ⚡ Progress: 1/5 (Running: 1, Failed: 0) | Elapsed: 5m 15s
@@ -132,108 +113,135 @@ $ node dist/cli.js
 ^C  # 只能杀死整个进程
 ```
 
-### After (v5.1)
-
-#### 场景A: 代码任务 (自动Tmux模式)
+### After (v5.1.1) - 统一表格TUI
 ```bash
 $ node dist/cli.js
-🎬 [Tmux] Task task_1 started in background session
-📺 To watch: tmux attach -t vibe-task-task_1
-🔧 To intervene: tmux attach -t vibe-task-task_1 (then use Ctrl+B D to detach)
+# ASCII艺术Banner
+📋 Vibe Flow Task Dashboard
 
-# 另开终端
-$ node dist/cli-tmux.js attach task_1
-# 直接进入Claude交互界面，可以看到实时输出，可以输入命令
-# 按 Ctrl+B D 分离，主进程自动继续
+┌─────┬─────────────────────┬──────────────────────┬─────────────────┬─────────────────────┐
+│ ID  │ Task Name           │ Status               │ Tmux Session    │ Progress            │
+├─────┼─────────────────────┼──────────────────────┼─────────────────┼─────────────────────┤
+│ 1   │ HTML Core Structure │ ⠙ Running (1m 30s)  │ vibe-task-1     │ 🤔 Still working... │
+│ 2   │ CSS Theme Engine    │ ⏳ Waiting           │ -               │ -                   │
+│ 3   │ Timer Core Logic    │ ⏳ Waiting           │ -               │ -                   │
+│ 4   │ SVG Progress Ring   │ ⏳ Waiting           │ -               │ -                   │
+│ 5   │ Audio Manager       │ ⏳ Waiting           │ -               │ -                   │
+└─────┴─────────────────────┴──────────────────────┴─────────────────┴─────────────────────┘
+
+⚡ Overall Progress: 0/5 completed | Elapsed: 1m 30s
+
+🔄 Merge & Review Phase:
+⏳ Waiting for all tasks to complete...
+
+# 用户操作
+$ node dist/cli/tmux-cli.js attach 1
+# 或
+$ tmux attach -t vibe-task-1
+# 直接进入Claude交互界面，可以看到实时输出
+# 按 Ctrl+B D 分离，表格自动更新状态
 ```
 
-#### 场景B: 规划任务 (Session-ID模式)
-```bash
-$ node dist/cli.js
-🤔 [Claude] Still thinking... (60s timeout remaining)
-💡 Press Ctrl+T to enter debug mode if needed
-
-# 用户按 Ctrl+T
-🔧 [DEBUG MODE] Task execution interrupted
-📊 Task Status:
-1. ⚙️ 项目结构分析 (240s elapsed)
-   Session ID: e15c5b87-f7da-482c-88cb-e108cc2cda42
-
-> debug
-> Enter task number to debug: 1
-> Choose debug method: 2  # Try to resume existing session
-🔄 Attempting to resume session e15c5b87-f7da-482c-88cb-e108cc2cda42...
-```
+### 关键改进
+1. **信息集中**: 所有信息在一个表格中显示
+2. **状态清晰**: 图标+文字的双重标识
+3. **操作统一**: 只用tmux attach一种方式
+4. **实时更新**: 自动刷新，无需手动操作
+5. **完整性**: 从任务开始到merge完成的全流程可见
 
 ## 🔧 技术亮点
 
-### 1. 输入输出解耦设计
+### 1. 表格TUI渲染系统
 ```typescript
-// 避免Shell转义地狱
-const promptFile = `.vibe_prompt_${taskId}.txt`;
-fs.writeFileSync(promptFile, prompt);
-const innerCmd = `claude "$(cat '${promptFile}')"`;
+// 统一的表格显示替代滚动进度条
+private render(): void {
+    console.clear();
+    const table = [
+        '┌─────┬─────────────────────┬──────────────────────┬─────────────────┬─────────────────────┐',
+        '│ ID  │ Task Name           │ Status               │ Tmux Session    │ Progress            │',
+        '├─────┼─────────────────────┼──────────────────────┼─────────────────┼─────────────────────┤'
+    ];
+    // 动态生成表格行...
+}
 ```
 
-### 2. 进程状态轮询
+### 2. 全局状态管理
 ```typescript
-// 替代进程等待，支持外部介入
-const checkInterval = setInterval(() => {
-    try {
-        execSync(`tmux has-session -t ${sessionId}`, { stdio: 'ignore' });
-    } catch {
-        // Session不存在 = 任务完成
-        clearInterval(checkInterval);
-        resolve();
-    }
-}, 2000);
+// 跨组件的状态同步
+let globalMonitor: ProgressMonitor | null = null;
+
+// 在session.ts中更新merge/review状态
+const monitor = ProgressMonitor.getGlobalInstance();
+monitor?.setMergeStatus('completed');
 ```
 
-### 3. 智能模式选择
+### 3. 简化的执行模式
 ```typescript
-// 根据任务类型自动优化
-const useTmux = await TmuxTaskRunner.isTmuxAvailable() && shouldUseTmux(task);
+// 一刀切Tmux模式，无复杂判断
+await TmuxTaskRunner.runClaudeInTmux({
+    taskId: task.id,
+    prompt: prompt,
+    cwd: task.worktreePath,
+    needsOutput: true,
+    outputFormat: 'json',
+    timeout: 0 // 无超时限制
+});
 ```
 
 ## 📊 性能和兼容性
 
 ### 依赖要求
 - **核心功能**: Claude CLI (原有)
-- **Tmux功能**: tmux (新加，可选)
+- **Tmux功能**: tmux (新加，可选但强烈推荐)
 - **Node.js**: v16+ (原有)
 
 ### 资源影响
-- **Session-ID模式**: 无额外开销
-- **Tmux模式**: 每个任务额外占用一个tmux会话(~1MB内存)
-- **混合模式**: 智能选择，资源使用最优
+- **统一Tmux模式**: 每个任务一个tmux会话(~1MB内存)
+- **表格TUI**: 极低开销，2秒轮询
+- **删除组件**: 移除了InteractiveTaskManager等复杂组件
 
 ### 向后兼容
 - ✅ 完全向后兼容v5.0
-- ✅ 无tmux时自动降级到Session-ID模式
+- ✅ 无tmux时友好提示和降级
 - ✅ 原有配置和命令保持不变
 
-## 🚀 未来扩展方向
+### 代码复杂度改进
+- **删除**: 200+行复杂逻辑代码
+- **新增**: 300+行简洁TUI组件
+- **净变化**: 简洁性大幅提升
 
-### 短期改进
-- Web UI监控界面
-- 任务执行历史记录
-- 更丰富的调试工具
+## 🎯 设计哲学对比
 
-### 长期规划
-- 分布式任务执行
-- 任务依赖关系管理
-- 智能资源调度
+### v5.1.0 - "智能但复杂"
+```typescript
+// 复杂的任务分类
+function shouldUseTmux(task: TaskState): boolean {
+    const codingTasks = [...]; // 50+关键词
+    return codingTasks.some(keyword => task.desc.includes(keyword));
+}
+```
+
+### v5.1.1 - "简洁粗暴"
+```typescript
+// 一刀切Tmux模式
+await TmuxTaskRunner.runClaudeInTmux({...});
+// 所有任务都用Tmux，无需判断
+```
 
 ## 🎉 总结
 
-这次更新从根本上解决了"黑盒执行"的问题，实现了从**被动等待**到**主动控制**的转变：
+这次更新体现了**"少即是多"**的设计哲学：
 
-1. **完全可见** - 用户能看到Claude的每个思考过程
-2. **随时介入** - 多种方式可以进入交互模式
-3. **智能选择** - 根据任务特点自动优化执行策略
-4. **优雅降级** - 无额外依赖时仍提供基础功能
+1. **删除比添加更重要** - 移除了复杂的分类逻辑、双重调试模式
+2. **一致性优于灵活性** - 统一的Tmux模式，消除了用户选择的困惑
+3. **实用主义优先** - 专注于解决用户介入Claude任务的核心需求
 
-**特别感谢实习生的Tmux方案思路**，这是一个典型的"跳出框架思考"的工程解决方案，为项目带来了质的飞跃。
+**核心价值转变**:
+- **从"智能选择"到"统一简单"**
+- **从"多重方案"到"单一优雅"**
+- **从"复杂功能"到"直观体验"**
+
+这个表格TUI提供了更好的可观测性和更简洁的工程实现，是典型的"好品味"设计。
 
 ---
 
@@ -241,5 +249,5 @@ const useTmux = await TmuxTaskRunner.isTmuxAvailable() && shouldUseTmux(task);
 ```bash
 npm install  # 如需Tmux功能，请确保系统已安装tmux
 npm run build  # 重新构建
-node dist/cli.js  # 享受全新的交互体验！
+node dist/cli.js  # 享受全新的表格TUI体验！
 ```
